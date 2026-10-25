@@ -133,3 +133,9 @@ table.t .field{min-height:36px;padding:6px 8px;font-size:14px}
   .top .who{margin-left:0}
 }
 @media print{.top,.menu,.cols>aside{display:none}}
+
+/* Indian Railways logo: red emblem on a white disc with a thin gold ring, so it reads on maroon */
+.logo{width:44px;height:44px;border-radius:50%;background:#fff;padding:2px;box-shadow:0 0 0 2px var(--gold-soft);flex-shrink:0;display:block}
+.logo-lg{width:76px;height:76px;padding:3px}
+.credit{font-size:12px;color:var(--faint);padding-top:18px;padding-bottom:22px;border-top:1px solid var(--rule-soft)}
+.credit-dark{font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--sand)}

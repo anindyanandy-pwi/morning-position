@@ -7,6 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif:ital,wght@0,500;0,600;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="ir-logo-180.png">
 <link rel="stylesheet" href="style.css">
 <script src="config.js"></script>
 <script src="vendor/docx-9.8.1.iife.js"></script>
@@ -18,14 +20,14 @@
 <div id="signin" class="signin">
   <section class="brand">
     <div class="brand-row">
-      <span class="roundel" aria-hidden="true">ER</span>
+      <img class="logo logo-lg" src="ir-logo-256.png" alt="Indian Railways">
       <div><div class="t1">Eastern Railway</div><div class="t2">Howrah Division · Engineering</div></div>
     </div>
     <div>
       <h1 class="big">AEN Morning<br>Position</h1>
       <p class="lede">The daily position of the ten AEN offices, prepared each morning by Engg/CNL.</p>
     </div>
-    <div class="mono" style="font-size:12px;color:var(--sand);letter-spacing:.06em">P.WAY PLANNING · HOWRAH</div>
+    <div class="credit-dark">Designed &amp; developed by Anindya Nandy · SSE/P.Way/Planning, Howrah Division</div>
   </section>
   <section class="form-side">
     <div class="form" id="stepEmail">
@@ -57,7 +59,7 @@
 <div id="app" hidden>
   <header class="top">
     <div class="wrap">
-      <span class="roundel" aria-hidden="true" style="width:40px;height:40px;font-size:14px">ER</span>
+      <img class="logo" src="ir-logo-256.png" alt="Indian Railways">
       <div class="brand-row"><div><div class="t1">Eastern Railway · Howrah Division</div><div class="t2">Engineering · AEN Morning Position</div></div></div>
       <span class="who"><span id="who"></span> · <button class="btn-text" id="signOut">Sign out</button></span>
     </div>
@@ -115,7 +117,7 @@
       <section class="list" style="padding-top:26px">
         <h2 class="h2" style="margin-bottom:12px">Earlier reports</h2>
         <div id="aList"></div>
-        <p class="aside-note" style="margin-top:18px">Prepared by Engg/CNL. The last two pages of the Word file are left blank for worksites and remarks.</p>
+        <p class="aside-note" style="margin-top:18px">Prepared by Engg/CNL. The worksite and remarks tables at the end of the Word file are left blank for Mini Control.</p>
       </section>
     </div>
 
@@ -177,6 +179,7 @@
       </div>
     </div>
   </main>
+  <footer class="wrap credit">Designed &amp; developed by Anindya Nandy · SSE/P.Way/Planning, Howrah Division</footer>
 </div>
 
 <script src="app.js"></script>

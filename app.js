@@ -101,8 +101,10 @@
   }
 
   /* ---------- Word file ---------- */
+  let logoBytes = null;   // the Indian Railways logo for the letterhead, fetched once
+  const getLogo = async () => { if (!logoBytes) { try { logoBytes = new Uint8Array(await (await fetch('ir-logo-256.png')).arrayBuffer()); } catch (e) { logoBytes = null; } } return logoBytes; };
   async function saveDocx(R) {
-    const blob = await docx.Packer.toBlob(buildMorningDoc(docx, R));
+    const blob = await docx.Packer.toBlob(buildMorningDoc(docx, R, { logo: await getLogo() }));
     const a = el('a'); a.href = URL.createObjectURL(blob);
     a.download = 'Morning_Position_AEN-' + R.aen.replace('/', '-') + '_' + dmy(R.date) + '.docx';
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 30000);

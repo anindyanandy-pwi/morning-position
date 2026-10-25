@@ -122,14 +122,22 @@
   const failed = {};        // aen -> message
   $('tPick').onchange = () => { if ($('tPick').value) { D = $('tPick').value; loadToday(); } };
 
+  // The ten tiles and the Generate buttons are ready at once; nothing waits for the server.
+  // Which reports were already saved for the date is filled in quietly in the background.
+  const fresh = {};         // aen -> saved in this page for date D (wins over the background answer)
+  function blankDay() {
+    return { date: D, aens: me.offices.map(o => ({ aen: o.aen, office: o.office, count: 0, latest: null })), sources: null };
+  }
   async function loadToday() {
-    drawHero();
-    if (!today || today.date !== D) {
-      today = null; $('tiles').innerHTML = ''; $('tProgress').textContent = 'READING…';
-      $('genAll').disabled = true; $('genAll').textContent = 'Reading the day…';
-    }
-    try { const t = await call('today', { date: D }); if (t.date === D) { today = t; drawToday(); } }
-    catch (e) { tell(e.message, 'err'); console.error(e); $('tProgress').textContent = ''; $('genAll').textContent = 'Generate all ten'; $('genAll').disabled = !today; }
+    if (!today || today.date !== D) { today = blankDay(); Object.keys(fresh).forEach(k => delete fresh[k]); }
+    drawToday();
+    const asked = D;
+    try {
+      const t = await call('today', { date: asked });
+      if (asked !== D || !t || !Array.isArray(t.aens)) return;
+      t.aens.forEach(x => { const a = today.aens.find(y => y.aen === x.aen); if (a && !fresh[a.aen]) { a.latest = x.latest; a.count = x.count; } });
+      today.sources = t.sources; drawToday();
+    } catch (e) { console.error(e); }          // status only; Generate works without it
   }
   function drawHero() {
     $('tDay').textContent = weekday(D) + ' · Morning position';
@@ -148,7 +156,6 @@
   function drawToday() {
     drawHero();
     let ready = 0, gap = 0;
-    if (!today || !Array.isArray(today.aens)) throw new Error('The server sent an incomplete answer. Please reload the page.');
     $('tiles').innerHTML = '';
     today.aens.forEach((a, i) => {
       const s = stateOf(a);
@@ -159,21 +166,19 @@
       const gp = el('div', 'gaps'); (s.gaps || []).forEach((g, k) => { if (k) gp.appendChild(el('br')); gp.appendChild(document.createTextNode(g)); }); t.appendChild(gp);
       const acts = el('div', 'acts');
       if (!busy[a.aen]) {
-        if (a.latest) {
-          const dl = el('button', 'btn', 'Download'); dl.onclick = () => download(a.aen, a.latest.name, dl);
-          const again = el('button', 'btn-text', 'Prepare again'); again.onclick = () => runQueue([a.aen]);
-          acts.append(dl, again);
-        } else { const g = el('button', 'btn-line', 'Generate'); g.onclick = () => runQueue([a.aen]); acts.appendChild(g); }
+        const g = el('button', a.latest ? 'btn-text' : 'btn-line', a.latest ? 'Generate again' : 'Generate'); g.onclick = () => runQueue([a.aen]);
+        if (a.latest) { const dl = el('button', 'btn', 'Download'); dl.onclick = () => download(a.aen, a.latest.name, dl); acts.append(dl, g); }
+        else acts.appendChild(g);
       }
       t.appendChild(acts); $('tiles').appendChild(t);
     });
     const left = today.aens.length - ready - gap;
     $('cReady').textContent = two(ready); $('cGap').textContent = two(gap); $('cLeft').textContent = two(left);
-    const running = today.aens.find(a => busy[a.aen] === 'run');
-    $('tProgress').textContent = running ? 'AEN/' + running.aen + ' IN HAND' : (left ? left + ' TO GO' : 'ALL READY');
-    const remaining = today.aens.filter(a => !a.latest).length;
-    $('genAll').textContent = remaining === today.aens.length || remaining === 0 ? 'Generate all ten' : 'Generate remaining ' + remaining;
-    $('genAll').disabled = Object.keys(busy).length > 0;
+    const running = today.aens.filter(a => busy[a.aen] === 'run').map(a => 'AEN/' + a.aen).join(', ');
+    const queued = Object.keys(busy).length;
+    $('tProgress').textContent = running ? running + ' IN HAND · ' + queued + ' LEFT' : (left ? left + ' TO GO' : 'ALL READY');
+    $('genAll').textContent = queued ? 'Generating… ' + (today.aens.length - queued) + ' of ' + today.aens.length : 'Generate all ten';
+    $('genAll').disabled = queued > 0;
     drawSources(today.sources);
   }
   function drawSources(s) {
@@ -181,31 +186,31 @@
     const line = (k, v) => { const r = el('div', 'kv'); r.append(el('span', '', k), el('span', 'mono', v)); box.appendChild(r); };
     const when = x => x ? (x.at.slice(0, 10) === D ? x.at.slice(11) : dmy(x.at.slice(0, 10)) + ' ' + x.at.slice(11)) : 'not yet';
     line('Meeting sheet', 'live');
+    if (!s) { line('TMS data', '…'); return; }
     line('TMS items', when(s.items));
     line('TMS machines', when(s.machines));
-    line('TMS Control', s.tmsControl.at ? when({ at: String(s.tmsControl.at).replace('T', ' ').slice(0, 16) }) : 'not found');
+    line('TMS Control', s.tmsControl && s.tmsControl.at ? when({ at: String(s.tmsControl.at).replace('T', ' ').slice(0, 16) }) : 'not found');
   }
-  $('genAll').onclick = () => {
-    if (!today) return;                      // the day is still being read; the button is disabled meanwhile
-    const remaining = today.aens.filter(a => !a.latest).map(a => a.aen);
-    runQueue(remaining.length ? remaining : today.aens.map(a => a.aen));
-  };
+  // Every click makes a fresh report from the latest data, for all ten offices.
+  $('genAll').onclick = () => runQueue(today.aens.map(a => a.aen));
   function runQueue(list) { return runQueue_(list).catch(e => { tell(e.message, 'err'); console.error(e); }); }
   async function runQueue_(list) {
-    if (!today) return;
+    tell('');
     list = list.filter(a => !busy[a]);
     list.forEach(a => { busy[a] = 'queue'; delete failed[a]; });
     drawToday();
-    for (const aen of list) {
+    const one = async aen => {
       busy[aen] = 'run'; drawToday();
       try {
         const j = await call('generate', { date: D, aen });
         const a = today.aens.find(x => x.aen === aen);
-        if (a) { a.latest = j.info; a.count = (a.count || 0) + 1; }
+        if (a) { a.latest = j.info; a.count = (a.count || 0) + 1; fresh[aen] = true; }
       } catch (e) { failed[aen] = e.message; }
       delete busy[aen]; drawToday();
-    }
-    try { today = await call('today', { date: D }); drawToday(); } catch (e) {}
+    };
+    const todo = list.slice();
+    const worker = async () => { while (todo.length) await one(todo.shift()); };
+    await Promise.all([worker(), worker(), worker()]);   // three offices at a time
   }
 
   /* ---------- ruled list of saved reports ---------- */

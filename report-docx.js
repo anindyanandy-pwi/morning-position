@@ -203,9 +203,21 @@
     if (!ok('badRoad')) s4.push(problem(S.badRoad));
     else { const bw = fit([1, 1, 1, 1.1], half), r = S.badRoad.row;
       s4.push(table(bw, [H(['Total LCs', 'Open > 15 days', 'Open > 20 days', 'TDC'], bw), Rw([r.total, r.d15, r.d20, r.tdc], bw, ['c', 'c', 'c', 'c'])])); }
+    // NI LC gate inspection (tab 42): below bad road in the left column; CCTV takes the right column
+    let sNi = null;
+    if (S.niLc) {
+      sNi = [section(5, 'NI LC gate inspection & counselling', ok('niLc') ? 'as on ' + dmy(S.niLc.dataDate) + (S.niLc.stale ? ', latest available' : '') : null)];
+      if (!ok('niLc')) sNi.push(problem(S.niLc));
+      else if (!S.niLc.row) sNi.push(nilLine('No entry for this AEN'));
+      else { const q = S.niLc.row, cum = S.niLc.since ? ' since ' + S.niLc.since : ' so far';
+        sNi.push(kv([['NI LC gates', val(q.total)], ['Inspected within 12-day frequency', val(q.covered)], ['Gateman counselling done', val(q.counselled)],
+          ['Due for schedule inspection', q.due ? val(q.due) + ' – overdue' : 'Nil'],
+          ['Inspections: PWI / AEN / (Sr.)DEN', val(q.pwi) + ' / ' + val(q.aen) + ' / ' + val(q.den)],
+          ['Total' + cum, val(q.pwiCum) + ' / ' + val(q.aenCum) + ' / ' + val(q.denCum)]], 3200, half)); }
+    }
     let s5 = null;
     if (S.cctv) {
-      s5 = [section(5, 'CCTV recording check, NI LC gates', ok('cctv') ? dmy(S.cctv.dataDate) + (S.cctv.stale ? ', latest available' : '') : null)];
+      s5 = [section(sNi ? 6 : 5, 'CCTV recording check, NI LC gates', ok('cctv') ? dmy(S.cctv.dataDate) + (S.cctv.stale ? ', latest available' : '') : null)];
       if (!ok('cctv')) s5.push(problem(S.cctv));
       else if (!S.cctv.row) s5.push(nilLine('No entry for this AEN'));
       else { const c = S.cctv.row;
@@ -213,7 +225,7 @@
           ['Random trains checked (last 3 days)', val(c.random3)], ['Exception on date', c.today || 'Nil'], ['CCTV not working', c.working || 'Nil'],
           ...(c.zeroRemark ? [['Remarks against zero figure', c.zeroRemark]] : [])], 3200, half)); }
     }
-    let n = 5 + (s5 ? 1 : 0);
+    let n = 5 + (sNi ? 1 : 0) + (s5 ? 1 : 0);
 
     /* ---------- 6. KPI and inspections ---------- */
     const s6 = [section(n, 'KPI shortfall and inspections due / overdue', ok('kpi') && S.kpi.generatedAt ? 'TMS Control, ' + S.kpi.generatedAt : 'from TMS Control')];
@@ -270,7 +282,8 @@
     n++;
 
     /* ---------- 9. TMS items ---------- */
-    const s9 = [section(n, 'TMS items', ok('tms') ? 'position of ' + dmy(S.tms.curDate) + (S.tms.prevDate ? ' against ' + dmy(S.tms.prevDate) : '') + (S.tms.stale ? ', latest available' : '') : null)];
+    // read by the TMS reader early on the report day: the position up to the previous day
+    const s9 = [section(n, 'TMS items', ok('tms') ? 'position on the morning of ' + dmy(S.tms.curDate) + (S.tms.prevDate ? ', against the morning of ' + dmy(S.tms.prevDate) : '') + (S.tms.stale ? ', latest available' : '') : null)];
     if (!ok('tms')) s9.push(problem(S.tms));
     else {
       const rowsT = []; let last = null;
@@ -339,7 +352,7 @@
 
     const nightTxt = 'Work of ' + dmy(R.period.day) + ' (day) and night of ' + R.period.night.split('/').map(d => d.slice(8, 10)).join('/') + '.' + D.slice(5, 7) + '.' + D.slice(0, 4);
     const mainKids = [...letterhead('MORNING POSITION', nightTxt), abstract, pair(s1, s2), ...s3,
-      s5 ? pair(s4, s5) : pair(s4, [para('')]), ...s6, ...s7, ...s8, ...s9];
+      s5 || sNi ? pair([...s4, ...(sNi || [])], s5 || [para('')]) : pair(s4, [para('')]), ...s6, ...s7, ...s8, ...s9];
     const mainFlow = flow(mainKids);
     // Size the remarks for the worst case: Word running the report up to ~8 % longer than estimated (measured 2–5 %);
     // the allowance grows with the length of the report, as such an error adds up page by page.

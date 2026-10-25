@@ -124,9 +124,12 @@
 
   async function loadToday() {
     drawHero();
-    if (!today || today.date !== D) { $('tiles').innerHTML = ''; $('tProgress').textContent = 'Reading…'; }
-    try { today = await call('today', { date: D }); drawToday(); }
-    catch (e) { tell(e.message, 'err'); $('tProgress').textContent = ''; }
+    if (!today || today.date !== D) {
+      today = null; $('tiles').innerHTML = ''; $('tProgress').textContent = 'READING…';
+      $('genAll').disabled = true; $('genAll').textContent = 'Reading the day…';
+    }
+    try { const t = await call('today', { date: D }); if (t.date === D) { today = t; drawToday(); } }
+    catch (e) { tell(e.message, 'err'); console.error(e); $('tProgress').textContent = ''; $('genAll').textContent = 'Generate all ten'; $('genAll').disabled = !today; }
   }
   function drawHero() {
     $('tDay').textContent = weekday(D) + ' · Morning position';
@@ -145,6 +148,7 @@
   function drawToday() {
     drawHero();
     let ready = 0, gap = 0;
+    if (!today || !Array.isArray(today.aens)) throw new Error('The server sent an incomplete answer. Please reload the page.');
     $('tiles').innerHTML = '';
     today.aens.forEach((a, i) => {
       const s = stateOf(a);
@@ -182,10 +186,13 @@
     line('TMS Control', s.tmsControl.at ? when({ at: String(s.tmsControl.at).replace('T', ' ').slice(0, 16) }) : 'not found');
   }
   $('genAll').onclick = () => {
+    if (!today) return;                      // the day is still being read; the button is disabled meanwhile
     const remaining = today.aens.filter(a => !a.latest).map(a => a.aen);
     runQueue(remaining.length ? remaining : today.aens.map(a => a.aen));
   };
-  async function runQueue(list) {
+  function runQueue(list) { return runQueue_(list).catch(e => { tell(e.message, 'err'); console.error(e); }); }
+  async function runQueue_(list) {
+    if (!today) return;
     list = list.filter(a => !busy[a]);
     list.forEach(a => { busy[a] = 'queue'; delete failed[a]; });
     drawToday();
@@ -194,7 +201,7 @@
       try {
         const j = await call('generate', { date: D, aen });
         const a = today.aens.find(x => x.aen === aen);
-        a.latest = j.info; a.count = (a.count || 0) + 1;
+        if (a) { a.latest = j.info; a.count = (a.count || 0) + 1; }
       } catch (e) { failed[aen] = e.message; }
       delete busy[aen]; drawToday();
     }
@@ -270,7 +277,7 @@
         const ul = el('ul'); lines.forEach(l => ul.appendChild(el('li', '', l))); iss.appendChild(ul);
       }));
       if (!iss.children.length) iss.appendChild(el('p', 'empty', 'Nothing to look at.'));
-    } catch (e) { tell(e.message, 'err'); }
+    } catch (e) { tell(e.message, 'err'); console.error(e); }
   }
   function drawUsers() {
     const tb = $('usersBody'); tb.innerHTML = '';

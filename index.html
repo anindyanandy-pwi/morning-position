@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AEN Morning Position — Howrah Division</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif:ital,wght@0,500;0,600;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+<script src="vendor/docx-9.8.1.iife.js"></script>
+<script src="report-docx.js"></script>
+</head>
+<body>
+
+<!-- ============ sign in ============ -->
+<div id="signin" class="signin">
+  <section class="brand">
+    <div class="brand-row">
+      <span class="roundel" aria-hidden="true">ER</span>
+      <div><div class="t1">Eastern Railway</div><div class="t2">Howrah Division · Engineering</div></div>
+    </div>
+    <div>
+      <h1 class="big">AEN Morning<br>Position</h1>
+      <p class="lede">The daily position of the ten AEN offices, prepared each morning by Engg/CNL.</p>
+    </div>
+    <div class="mono" style="font-size:12px;color:var(--sand);letter-spacing:.06em">P.WAY PLANNING · HOWRAH</div>
+  </section>
+  <section class="form-side">
+    <div class="form" id="stepEmail">
+      <div>
+        <div class="label">Step 1 of 2</div>
+        <h2>Sign in</h2>
+        <p class="sub">Enter the email registered for your office. We will send a 6-digit code to it.</p>
+      </div>
+      <label class="stack">Email<input class="field" type="email" id="loginEmail" autocomplete="email"></label>
+      <div class="row"><button class="btn grow" id="sendCode">Send code</button></div>
+      <p class="msg" id="msgEmail" role="status"></p>
+      <p class="note">Email not registered? Contact the P.Way Planning office, Howrah.</p>
+    </div>
+    <div class="form" id="stepCode" hidden>
+      <div>
+        <div class="label">Step 2 of 2</div>
+        <h2>Enter your code</h2>
+        <p class="sub">Sent to <b id="sentTo" style="color:var(--ink);font-weight:500"></b> · valid 10 minutes</p>
+      </div>
+      <label class="stack">6-digit code<input class="field codebox" type="text" id="loginCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></label>
+      <div class="row"><button class="btn grow" id="verifyCode">Sign in</button><button class="btn-line" id="resend" style="min-height:46px">Resend</button></div>
+      <p class="msg" id="msgCode" role="status"></p>
+      <p class="note">Wrong email? <button class="btn-text" id="changeEmail">Change it</button>. Not arrived? Check the spam folder. You stay signed in on this device for 15 days.</p>
+    </div>
+  </section>
+</div>
+
+<!-- ============ the app ============ -->
+<div id="app" hidden>
+  <header class="top">
+    <div class="wrap">
+      <span class="roundel" aria-hidden="true" style="width:40px;height:40px;font-size:14px">ER</span>
+      <div class="brand-row"><div><div class="t1">Eastern Railway · Howrah Division</div><div class="t2">Engineering · AEN Morning Position</div></div></div>
+      <span class="who"><span id="who"></span> · <button class="btn-text" id="signOut">Sign out</button></span>
+    </div>
+  </header>
+  <nav class="menu" id="menu" aria-label="Main" hidden><div class="wrap" id="menuItems"></div></nav>
+
+  <main class="wrap">
+    <p class="msg" id="msg" role="status" style="padding-top:12px"></p>
+
+    <!-- Engg/CNL and admin: today -->
+    <div id="vToday" hidden>
+      <section class="hero">
+        <div>
+          <div class="label" id="tDay"></div>
+          <div class="date" id="tDate"></div>
+          <div class="dateline" id="tLine"></div>
+        </div>
+        <div class="hero-side">
+          <div class="counts">
+            <div><div class="n" id="cReady">00</div><div class="w">ready</div></div>
+            <div><div class="n" id="cGap" style="color:var(--warn)">00</div><div class="w">with gaps</div></div>
+            <div><div class="n" id="cLeft" style="color:var(--faint)">00</div><div class="w">to go</div></div>
+          </div>
+          <button class="btn" id="genAll">Generate all ten</button>
+        </div>
+      </section>
+      <div class="cols">
+        <section>
+          <div class="sec-head"><h2>The ten offices</h2><span class="mono small" id="tProgress"></span></div>
+          <div class="tiles" id="tiles"></div>
+        </section>
+        <aside>
+          <div>
+            <div class="label">Sources</div>
+            <div style="margin-top:8px" id="sources"></div>
+          </div>
+          <div>
+            <div class="label">Other dates</div>
+            <label class="stack" style="margin-top:8px">Report date<input class="field" type="date" id="tPick"></label>
+          </div>
+          <p class="aside-note">Each report is saved for its AEN office the moment it is ready, and kept exactly as prepared. Keep this page open while all ten are being prepared.</p>
+        </aside>
+      </div>
+    </div>
+
+    <!-- AEN office -->
+    <div id="vAen" hidden>
+      <section class="hero">
+        <div>
+          <div class="label" id="aOffice"></div>
+          <div class="serif" style="font-size:clamp(40px,6vw,56px);font-weight:700;line-height:1;margin-top:8px" id="aCode"></div>
+        </div>
+        <div class="today-box" id="aToday"></div>
+      </section>
+      <section class="list" style="padding-top:26px">
+        <h2 class="h2" style="margin-bottom:12px">Earlier reports</h2>
+        <div id="aList"></div>
+        <p class="aside-note" style="margin-top:18px">Prepared by Engg/CNL. The last two pages of the Word file are left blank for worksites and remarks.</p>
+      </section>
+    </div>
+
+    <!-- Engg/CNL and admin: reports of any AEN -->
+    <div id="vReports" hidden>
+      <div class="page-head">
+        <div><h1 class="h2" style="font-size:30px">Reports</h1><p>Every saved report, newest first.</p></div>
+        <label class="stack" style="min-width:220px">AEN<select class="field" id="rAen"></select></label>
+      </div>
+      <section class="list" id="rList"></section>
+    </div>
+
+    <!-- admin: users -->
+    <div id="vUsers" hidden>
+      <div class="page-head">
+        <div><h1 class="h2" style="font-size:30px">Users</h1><p>Who can sign in, and what they can do. Changes apply as soon as you save.</p></div>
+        <div class="row"><button class="btn-line" id="addUser" style="min-height:46px">Add user</button><button class="btn" id="saveUsers">Save</button></div>
+      </div>
+      <div class="table-box">
+        <table class="t">
+          <thead><tr><th>Email</th><th style="width:210px">Role</th><th style="width:150px">AEN</th><th style="width:200px">Name / post</th><th style="width:70px">Active</th><th style="width:80px"></th></tr></thead>
+          <tbody id="usersBody"></tbody>
+        </table>
+      </div>
+      <p class="small" style="margin-top:14px"><b>Administrator</b> everything, including these pages · <b>Engg/CNL</b> prepares and sees reports of all AENs · <b>AEN office</b> downloads its own reports</p>
+    </div>
+
+    <!-- admin: settings -->
+    <div id="vSettings" hidden>
+      <div class="page-head"><div><h1 class="h2" style="font-size:30px">Settings</h1></div></div>
+      <div class="block">
+        <div class="label">Cut-off time</div>
+        <div class="row"><label class="stack">Time (IST)<input class="field" type="time" id="cutoff" style="width:140px"></label><button class="btn-line" id="saveCutoff" style="min-height:42px">Save cut-off</button></div>
+        <p class="small">Before this time a report is marked as prepared early, as some of the day's data may not be in yet.</p>
+      </div>
+      <div class="block">
+        <div class="label">TMS reader key</div>
+        <div class="row"><button class="btn-line" id="newKey" style="min-height:42px">Make a new key</button><span class="small" id="keyState"></span></div>
+        <div class="keyout" id="keyOut" hidden></div>
+        <p class="small">The key is shown once. Paste it into the TMS reader's settings. Making a new key stops the old one.</p>
+      </div>
+    </div>
+
+    <!-- admin: data and checks -->
+    <div id="vData" hidden>
+      <div class="page-head"><div><h1 class="h2" style="font-size:30px">Data and checks</h1><p>What came in, and rows that need a look.</p></div></div>
+      <div class="block">
+        <div class="label">TMS Control export</div>
+        <div id="dTmsc" class="small"></div>
+      </div>
+      <div class="block">
+        <div class="label">Received from the TMS reader</div>
+        <div class="table-box"><table class="t" style="min-width:600px"><thead><tr><th>Received</th><th>What</th><th>For date</th><th>Rows</th></tr></thead><tbody id="dUploads"></tbody></table></div>
+      </div>
+      <div class="block issues">
+        <div class="label">Rows that need attention</div>
+        <p class="small">Entries that could not be placed under an AEN, and times that Google Sheets had turned into dates.</p>
+        <div id="dIssues"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

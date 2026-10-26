@@ -20,6 +20,7 @@
     /* ---------- small helpers ---------- */
     const dmy = iso => iso ? iso.slice(8, 10) + '.' + iso.slice(5, 7) + '.' + iso.slice(0, 4) : '';
     const dm = iso => iso ? iso.slice(8, 10) + '.' + iso.slice(5, 7) : '';
+    const addDays = (iso, n) => { if (!iso) return iso; const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
     const pct = v => v === null || v === undefined ? '–' : Math.round(v * 100) + '%';
     const val = v => v === null || v === undefined || v === '' ? '–' : (typeof v === 'number' ? (Number.isInteger(v) ? String(v) : v.toFixed(2)) : String(v));
     const tag = (r, text, size, bold, imgH) => { r._t = String(text); r._s = size || SZ; r._b = !!bold; if (imgH) r._img = imgH; return r; };
@@ -83,8 +84,13 @@
       children: vals.map((v, i) => v instanceof TableCell ? v : cell(val(v), widths[i], { align: aligns[i] === 'c' ? C : L, size: o.size, bold: o.bold })) });
     const fit = (parts, total) => { const s = parts.reduce((a, c) => a + c, 0); const out = parts.map(p => Math.floor(p * total / s)); out[out.length - 1] += total - out.reduce((a, c) => a + c, 0); return out; };
 
-    const section = (no, title, note) => para([run(no + '.  ', { bold: true, size: 21 }), run(title, { bold: true, underline: true, size: 21 }),
-      ...(note ? [run('  (' + note + ')', { size: 17, italics: true })] : [])], { before: 110, after: 50, keepNext: true });
+    // note: the date of the data used (always shown); late: said in bold when that date is older than expected
+    const section = (no, title, note, late) => para([run(no + '.  ', { bold: true, size: 21 }), run(title, { bold: true, underline: true, size: 21 }),
+      ...(note || late ? [run('  (' + (note || ''), { size: 17, italics: true }),
+        ...(late ? [run((note ? ', ' : '') + 'older data: ' + late, { size: 17, italics: true, bold: true })] : []), run(')', { size: 17, italics: true })] : [])],
+      { before: 110, after: 50, keepNext: true });
+    const nightOf = (from, to) => from && to ? from.slice(8, 10) + '/' + dmy(to) : (to ? dmy(to) : '');
+    const notYet = what => what + ' not yet in the sheet';
     const half = (W - 240) / 2;
     const pair = (left, right) => table([half, 240, half], [TR({ children: [
       cell(left, half, { borders: NONE, valign: VerticalAlign.TOP }), cell([para('')], 240, { borders: NONE }),
@@ -92,7 +98,6 @@
     // (pair's height: the taller of its two sides, each a list of paragraphs and tables)
     const nilLine = (text) => para([run(text, { size: SZ })], { after: 20 });
     const problem = (s) => para([run('Could not be read: ', { bold: true, size: 18 }), run(s.error, { italics: true, size: 18 })], { after: 20 });
-    const staleNote = (iso, stale) => stale && iso ? 'data of ' + dmy(iso) + ', latest available' : null;
     const kv = (rows, w1, width) => { const w = [w1, width - w1]; return table(w, rows.map(([k, v]) => Rw([k, v], w, ['l', 'c']))); };
 
     /* ---------- heading: Eastern Railway letterhead (पूर्व रेलवे · IR logo · EASTERN RAILWAY) ---------- */
@@ -133,17 +138,24 @@
     const failN = ok('major') && ok('minor') ? S.major.rows.length + S.minor.rows.length : null;
     const blk = ok('blocks') ? S.blocks : null, mc = ok('machines') ? S.machines : null;
     const nilOr = n => n === null ? '–' : (n === 0 ? 'Nil' : String(n));
+    // † on a figure that comes from older data (the previous day's entry not yet in the sheet)
+    const old = k => ok(k) && !!S[k].stale;
     const abstractCells = [
-      ['Caution past TDC', nilOr(tdcN)], ['Mini control exceptions', nilOr(excN)], ['Failures (' + dm(R.period.day) + ')', nilOr(failN)],
-      ['LCs with bad road', ok('badRoad') && S.badRoad.row ? val(S.badRoad.row.total) : '–'],
-      ['Blocks availed', blk ? blk.rows.length + ' (' + blk.rows.reduce((a, r) => a + (r.availed || 0), 0) + ' min)' : '–'],
-      ['Blocks not availed', blk && blk.notAvailedDay !== null ? blk.notAvailedDay + ' (month: ' + blk.notAvailedMonth + ')' : '–'],
-      ['M/C block utilisation', mc ? pct(mc.total.util) : '–'], ['M/C days lost', mc ? String(mc.lost.length) : '–']];
+      ['Caution past TDC', nilOr(tdcN), old('tdcLapse')], ['Mini control exceptions', nilOr(excN), old('miniControl')],
+      ['Failures (' + dm(R.period.day) + ')', nilOr(failN), old('major') || old('minor')],
+      ['LCs with bad road', ok('badRoad') && S.badRoad.row ? val(S.badRoad.row.total) : '–', old('badRoad')],
+      ['Blocks availed', blk ? blk.rows.length + ' (' + blk.rows.reduce((a, r) => a + (r.availed || 0), 0) + ' min)' : '–', !!blk && (blk.dayStale || blk.nightStale)],
+      ['Blocks not availed', blk && blk.notAvailedDay !== null ? blk.notAvailedDay + ' (month: ' + blk.notAvailedMonth + ')' : '–', !!blk && !!blk.notAvailedStale],
+      ['M/C block utilisation', mc ? pct(mc.total.util) : '–', !!mc && !!mc.nightStale], ['M/C days lost', mc ? String(mc.lost.length) : '–', false]]
+      .map(([k, v, o]) => [k, o && v !== '–' ? v + ' †' : v, o]);
+    const anyOld = abstractCells.some(c => c[2]);
     const aw = fit(Array(8).fill(1), W);
     const abstract = table(aw, [H(abstractCells.map(c => c[0]), aw, 17), Rw(abstractCells.map(c => c[1]), aw, Array(8).fill('c'), { bold: true })]);
+    const abstractNote = anyOld ? [para([run('† older data: the entry for ' + dmy(R.period.day) + ' was not yet in the sheet; the section below gives the date used.', { italics: true, size: 16 })], { before: 30 })] : [];
 
     /* ---------- 1. mini control exceptions + GPS ---------- */
-    const s1 = [section(1, 'Mini control exceptions', ok('miniControl') ? staleNote(S.miniControl.dataDate, S.miniControl.stale) : null)];
+    const s1 = [section(1, 'Mini control exceptions', ok('miniControl') ? 'data of ' + dmy(S.miniControl.dataDate) : null,
+      ok('miniControl') && S.miniControl.stale ? notYet(dmy(R.period.day)) : null)];
     if (!ok('miniControl')) s1.push(problem(S.miniControl));
     else if (!S.miniControl.rows.length) s1.push(kv([['Mini control exceptions (' + dm(S.miniControl.dataDate) + ')', 'Nil']], 3200, half));
     else { const w = [1800, half - 1800]; s1.push(table(w, [H(['Item', 'Details of exception'], w), ...S.miniControl.rows.map(r => Rw([r.item, r.detail], w, ['l', 'l']))])); }
@@ -151,12 +163,13 @@
     else if (!S.gps.started || !S.gps.row) s1.push(kv([['Winter patrolling (GPS)', 'Season not started']], 3200, half));
     else {
       const g2 = S.gps.row;
-      s1.push(kv([['Patrol batches (GPS)', val(g2.total)], ['Defaulter batches', val(g2.defaulters)],
+      s1.push(kv([['Patrol batches (GPS), night of ' + nightOf(addDays(S.gps.dataDate, -1), S.gps.dataDate) + (S.gps.stale ? ' – older data' : ''), val(g2.total)], ['Defaulter batches', val(g2.defaulters)],
         ...g2.kinds.map(k => [k.name, val(k.n)]), ...(g2.action ? [['Action taken by AEN', g2.action]] : [])], 3200, half));
     }
 
     /* ---------- 2. failures ---------- */
-    const s2 = [section(2, 'Failures', dmy(R.period.day))];
+    const fd = ['major', 'minor'].filter(ok).map(k => S[k]), fLate = fd.some(x => x.stale);
+    const s2 = [section(2, 'Failures', fd.length ? 'reported on ' + [...new Set(fd.map(x => dmy(x.dataDate)))].join(' / ') : null, fLate ? notYet(dmy(R.period.day)) : null)];
     const failTable = (label, s, cols) => {
       if (!s.ok) return [problem(s)];
       if (!s.rows.length) return [kv([[label, 'Nil']], 3200, half)];
@@ -168,7 +181,11 @@
     s2.push(...failTable('Minor failure', S.minor, r => [r.station, [r.line, r.km].filter(Boolean).join(', '), r.type]));
 
     /* ---------- 3. cautions ---------- */
-    const s3 = [section(3, 'Cautions', 'TDC lapse, PQRS 30 km/h TDC fail, protection caution')];
+    const cN = [ok('tdcLapse') ? 'TDC lapse ' + dmy(S.tdcLapse.dataDate) : null, ok('pqrsTdc') ? 'PQRS TDC fail as listed' : null,
+      ok('protection') ? 'protection caution night of ' + nightOf(S.protection.nightOf, S.protection.dataDate) : null].filter(Boolean);
+    const cLate = [ok('tdcLapse') && S.tdcLapse.stale ? 'TDC lapse ' + dmy(R.period.day) : null,
+      ok('protection') && S.protection.stale ? 'protection caution night of ' + nightOf(R.period.night.split('/')[0], D) : null].filter(Boolean);
+    const s3 = [section(3, 'Cautions', cN.join(' · '), cLate.length ? notYet(cLate.join(', ')) : null)];
     let anyCaution = false;
     if (!ok('tdcLapse')) s3.push(problem(S.tdcLapse));
     else if (S.tdcLapse.rows.length) {
@@ -199,14 +216,15 @@
     if (!anyCaution && ok('tdcLapse') && ok('pqrsTdc') && ok('protection')) s3.push(nilLine('Nil'));
 
     /* ---------- 4. bad road, 5. CCTV ---------- */
-    const s4 = [section(4, 'Bad road surface at LCs', ok('badRoad') && S.badRoad.dataDate ? 'as on ' + dmy(S.badRoad.dataDate) : null)];
+    const s4 = [section(4, 'Bad road surface at LCs', ok('badRoad') && S.badRoad.dataDate ? 'as on ' + dmy(S.badRoad.dataDate) : null,
+      ok('badRoad') && S.badRoad.stale ? notYet('as on ' + dmy(R.period.day)) : null)];
     if (!ok('badRoad')) s4.push(problem(S.badRoad));
     else { const bw = fit([1, 1, 1, 1.1], half), r = S.badRoad.row;
       s4.push(table(bw, [H(['Total LCs', 'Open > 15 days', 'Open > 20 days', 'TDC'], bw), Rw([r.total, r.d15, r.d20, r.tdc], bw, ['c', 'c', 'c', 'c'])])); }
     // NI LC gate inspection (tab 42): below bad road in the left column; CCTV takes the right column
     let sNi = null;
     if (S.niLc) {
-      sNi = [section(5, 'NI LC gate inspection & counselling', ok('niLc') ? 'as on ' + dmy(S.niLc.dataDate) + (S.niLc.stale ? ', latest available' : '') : null)];
+      sNi = [section(5, 'NI LC gate inspection & counselling', ok('niLc') ? 'as on ' + dmy(S.niLc.dataDate) : null, ok('niLc') && S.niLc.stale ? notYet('as on ' + dmy(R.period.day)) : null)];
       if (!ok('niLc')) sNi.push(problem(S.niLc));
       else if (!S.niLc.row) sNi.push(nilLine('No entry for this AEN'));
       else { const q = S.niLc.row, cum = S.niLc.since ? ' since ' + S.niLc.since : ' so far';
@@ -217,7 +235,7 @@
     }
     let s5 = null;
     if (S.cctv) {
-      s5 = [section(sNi ? 6 : 5, 'CCTV recording check, NI LC gates', ok('cctv') ? dmy(S.cctv.dataDate) + (S.cctv.stale ? ', latest available' : '') : null)];
+      s5 = [section(sNi ? 6 : 5, 'CCTV recording check, NI LC gates', ok('cctv') ? 'data of ' + dmy(S.cctv.dataDate) : null, ok('cctv') && S.cctv.stale ? notYet(dmy(R.period.day)) : null)];
       if (!ok('cctv')) s5.push(problem(S.cctv));
       else if (!S.cctv.row) s5.push(nilLine('No entry for this AEN'));
       else { const c = S.cctv.row;
@@ -246,7 +264,10 @@
     n++;
 
     /* ---------- 7. blocks ---------- */
-    const s7 = [section(n, 'Blocks availed', 'day of ' + dmy(R.period.day) + ' and night of ' + R.period.night.split('/').map(d => d.slice(8, 10)).join('/') + '.' + D.slice(5, 7) + '.' + D.slice(0, 4))];
+    const wantNight = nightOf(R.period.night.split('/')[0], D);
+    const bLate = ok('blocks') ? [S.blocks.dayStale ? 'day ' + dmy(R.period.day) : null, S.blocks.nightStale ? 'night ' + wantNight : null].filter(Boolean) : [];
+    const s7 = [section(n, 'Blocks availed', ok('blocks') ? 'day of ' + dmy(S.blocks.dayDate) + ' and night of ' + nightOf(addDays(S.blocks.nightDate, -1), S.blocks.nightDate)
+      : 'day of ' + dmy(R.period.day) + ' and night of ' + wantNight, bLate.length ? notYet(bLate.join(', ')) : null)];
     if (!ok('blocks')) s7.push(problem(S.blocks));
     else {
       const bw = [450, 1300, 2700, 2300, 950, W - 7700], rows = S.blocks.rows;
@@ -256,14 +277,14 @@
         ...(rows.length ? rows.map((r, i) => Rw([String(i + 1), r.when, r.location, r.work, r.availed, r.progress], bw, ['c', 'c', 'l', 'l', 'c', 'l']))
           : [TR({ children: [cell('No block availed', W, { span: 6, align: C })] })]),
         TR({ children: [cell('Total', 6750, { span: 4, bold: true, align: RT }), cell(String(tot), 950, { bold: true, align: C }), cell(naText, W - 7700)] })]));
-      const notes = [staleNote(S.blocks.dayDate, S.blocks.dayStale) && 'Day blocks: ' + staleNote(S.blocks.dayDate, S.blocks.dayStale),
-        staleNote(S.blocks.nightDate, S.blocks.nightStale) && 'Night blocks: ' + staleNote(S.blocks.nightDate, S.blocks.nightStale)].filter(Boolean);
-      if (notes.length) s7.push(para([run('Note: ' + notes.join('; ') + '.', { italics: true, size: 17 })], { before: 20 }));
+      if (S.blocks.notAvailedStale) s7.push(para([run('Note: blocks not availed are of ' + dmy(S.blocks.notAvailedDate) + ' (older data).', { italics: true, bold: true, size: 17 })], { before: 20 }));
     }
     n++;
 
     /* ---------- 8. machines ---------- */
-    const s8 = [section(n, 'Machine utilisation', 'block from meeting sheet, effective time from TMS')];
+    const mLate = ok('machines') && S.machines.nightStale;
+    const s8 = [section(n, 'Machine utilisation', (ok('machines') && S.machines.nightDate ? 'night of ' + nightOf(S.machines.nightOf, S.machines.nightDate) + '; ' : '') + 'block from meeting sheet, effective time from TMS',
+      mLate ? notYet('night ' + wantNight) : null)];
     if (!ok('machines')) s8.push(problem(S.machines));
     else {
       const M = S.machines, mw = [450, 1150, 1500, 1500, 850, 850, 800, 850, 800, W - 8750];
@@ -283,7 +304,7 @@
 
     /* ---------- 9. TMS items ---------- */
     // read by the TMS reader early on the report day: the position up to the previous day
-    const s9 = [section(n, 'TMS items', ok('tms') ? 'position on the morning of ' + dmy(S.tms.curDate) + (S.tms.prevDate ? ', against the morning of ' + dmy(S.tms.prevDate) : '') + (S.tms.stale ? ', latest available' : '') : null)];
+    const s9 = [section(n, 'TMS items', ok('tms') ? 'position on the morning of ' + dmy(S.tms.curDate) + (S.tms.prevDate ? ', against the morning of ' + dmy(S.tms.prevDate) : '') : null, ok('tms') && S.tms.stale ? 'the TMS reader has not sent the reading of ' + dmy(D) : null)];
     if (!ok('tms')) s9.push(problem(S.tms));
     else {
       const rowsT = []; let last = null;
@@ -351,7 +372,7 @@
         ...Array.from({ length: n }, (_, i) => TR({ height: EX(IROW), cantSplit: true, children: iw.map((w, j) => cell(j === 0 ? String(i + 1) : '', w, { align: C })) }))])];
 
     const nightTxt = 'Work of ' + dmy(R.period.day) + ' (day) and night of ' + R.period.night.split('/').map(d => d.slice(8, 10)).join('/') + '.' + D.slice(5, 7) + '.' + D.slice(0, 4);
-    const mainKids = [...letterhead('MORNING POSITION', nightTxt), abstract, pair(s1, s2), ...s3,
+    const mainKids = [...letterhead('MORNING POSITION', nightTxt), abstract, ...abstractNote, pair(s1, s2), ...s3,
       s5 || sNi ? pair([...s4, ...(sNi || [])], s5 || [para('')]) : pair(s4, [para('')]), ...s6, ...s7, ...s8, ...s9];
     const mainFlow = flow(mainKids);
     // Size the remarks for the worst case: Word running the report up to ~8 % longer than estimated (measured 2–5 %);

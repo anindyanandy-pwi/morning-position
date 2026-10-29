@@ -81,11 +81,12 @@
       const TR = o => { const r = new TableRow(o); r._h = o.height && o.height.rule === HeightRule.EXACT ? o.height.value : Math.max(...o.children.map(c => c._h || lineH(SZ) + 40));
         r._head = !!o.tableHeader; r._cant = !!o.cantSplit;
         r._kept = () => { const k = TR(Object.assign({}, o, { children: o.children.map(c => c._keep ? c._keep() : c) })); k._keep = true; return k; }; return r; };
-      // No table leaves a stray row: its heading and first three rows stay together, and its last two rows stay together
+      // No table leaves a stray row: its heading and first three rows stay together, and so do its last three rows, so a
+      // long table that breaks across pages keeps at least three rows on each side
       // (Word's "keep with next" on the rows; flow() below treats such rows as one block).
       const table = (widths, rows, o = {}) => {
         const body = rows.filter(r => !r._head).length; let k = 0;
-        if (o.keep !== false) rows = rows.map(r => { if (r._head) return r._kept(); const i = k++; return (i < 2 || i === body - 2) && i < body - 1 ? r._kept() : r; });
+        if (o.keep !== false) rows = rows.map(r => { if (r._head) return r._kept(); const i = k++; return (i < 2 || i >= body - 3) && i < body - 1 ? r._kept() : r; });
         const tb = new Table({ width: { size: widths.reduce((a, c) => a + c, 0), type: WidthType.DXA },
         columnWidths: widths, layout: TableLayoutType.FIXED, rows }); tb._rows = rows; tb._h = rows.reduce((a, r) => a + r._h, 0); return tb; };
       const H = (labels, widths, size) => TR({ tableHeader: true, cantSplit: true,
@@ -102,9 +103,13 @@
       const nightOf = (from, to) => from && to ? from.slice(8, 10) + '/' + dmy(to) : (to ? dmy(to) : '');
       const notYet = what => what + ' not yet in the sheet';
       const half = (W - 240) / 2;
-      const pair = (left, right) => table([half, 240, half], [TR({ children: [
+      // two columns side by side, as one table row that moves as a whole (Word and LibreOffice do not split a row holding
+      // tables reliably); when it does not fit, the layouts below lay its sections out one after another instead.
+      // The empty line before it keeps Word from joining it to a table just above.
+      const pairT = (left, right) => table([half, 240, half], [TR({ cantSplit: true, children: [
         cell(left, half, { borders: NONE, valign: VerticalAlign.TOP }), cell([para('')], 240, { borders: NONE }),
         cell(right, half, { borders: NONE, valign: VerticalAlign.TOP })] })], { keep: false });
+      const pair = (left, right) => [para('', { exact: 40, keepNext: true }), pairT(left, right)];
       // (pair's height: the taller of its two sides, each a list of paragraphs and tables)
       const nilLine = (text) => para([run(text, { size: SZ })], { after: 20 });
       const problem = (s) => para([run('Could not be read: ', { bold: true, size: 18 }), run(s.error, { italics: true, size: 18 })], { after: 20 });
@@ -240,10 +245,11 @@
       if (!ok('badRoad')) s5.push(problem(S.badRoad));
       else { const bw = fit([1, 1, 1, 1.1], half), r = S.badRoad.row;
         s5.push(table(bw, [H(['Total LCs', 'Open > 15 days', 'Open > 20 days', 'TDC'], bw), Rw([r.total, r.d15, r.d20, r.tdc], bw, ['c', 'c', 'c', 'c'])])); }
-      // tabs 42 and 37 list only the AENs with NI LC gates; for the others both sections are one line
-      const notHere = 'Not applicable: the sheet lists no NI LC gate under AEN/' + R.aen;
+      // tabs 42 and 37 list only the AENs with NI LC gates; for the others sections 6 and 7 are one line
+      const noNi = !S.niLc && !S.cctv;
+      const s67 = [para([run('6–7.  ', { bold: true, size: 21 }), run('Sections 6 and 7 not applicable: no NI LC gates under AEN/' + R.aen + '.', { size: 19 })], { before: DZ.sec, after: 50 })];
       const s6 = [section(6, 'NI LC inspection', ok('niLc') ? 'as on ' + dmy(S.niLc.dataDate) : null, ok('niLc') && S.niLc.stale ? notYet('as on ' + dmy(R.period.day)) : null)];
-      if (!S.niLc) s6.push(nilLine(notHere));
+      if (!S.niLc) s6.push(nilLine('Not applicable to AEN/' + R.aen));
       else if (!ok('niLc')) s6.push(problem(S.niLc));
       else if (!S.niLc.row) s6.push(nilLine('No entry for this AEN'));
       else { const q = S.niLc.row, cum = S.niLc.since ? ' since ' + S.niLc.since : ' so far';
@@ -252,7 +258,7 @@
           ['Inspections: PWI / AEN / (Sr.)DEN', val(q.pwi) + ' / ' + val(q.aen) + ' / ' + val(q.den)],
           ['Total' + cum, val(q.pwiCum) + ' / ' + val(q.aenCum) + ' / ' + val(q.denCum)]], 3200, half)); }
       const s7 = [section(7, 'CCTV recording check', ok('cctv') ? 'data of ' + dmy(S.cctv.dataDate) : null, ok('cctv') && S.cctv.stale ? notYet(dmy(R.period.day)) : null)];
-      if (!S.cctv) s7.push(nilLine(notHere));
+      if (!S.cctv) s7.push(nilLine('Not applicable to AEN/' + R.aen));
       else if (!ok('cctv')) s7.push(problem(S.cctv));
       else if (!S.cctv.row) s7.push(nilLine('No entry for this AEN'));
       else { const c = S.cctv.row;
@@ -338,13 +344,14 @@
 
       /* ---------- page filling: where the main report ends ---------- */
       // Walk the main report as Word would: rows that cannot split move to the next page (with the table's header row repeated).
-      const flow = (els, y0, p0) => {
-        let y = y0 || 0, pages = p0 || 1, carry = 0;          // carry: headings kept with what follows them
+      const flow = (els, y0, p0, fills) => {
+        let y = y0 || 0, pages = p0 || 1, carry = 0, over = false;   // carry: headings kept with what follows them
+        fills = fills || [];                                  // how full each finished page is (twips)
         const add = (h, canSplit) => {
           h += carry; carry = 0;
           if (y + h <= PH) { y += h; return; }
-          if (!canSplit) { pages++; y = h; return; }
-          h -= PH - y; pages++; while (h > PH) { h -= PH; pages++; } y = h;
+          if (!canSplit) { if (h > PH) over = true; fills.push(y); pages++; y = h; return; }
+          h -= PH - y; fills.push(PH); pages++; while (h > PH) { h -= PH; fills.push(PH); pages++; } y = h;
         };
         els.forEach(el => {
           if (el._rows) {
@@ -359,70 +366,82 @@
           else add(paraH(el, W), false);
         });
         if (carry) add(0, false);
-        return { pages, y };
+        return { pages, y, fills, over };
       };
 
       /* ---------- where the pages end ----------
          The report ends where its last section ends. Word lays the pages out, not us, and the estimate above can be off
          by a few per cent of what has been laid out since the last fresh page (checked with tests/measure.js). Rules: no
-         page may be left near-empty, and no table may leave a stray row on a page of its own. A natural end that stays
-         safe if Word runs a little longer or shorter is kept; otherwise one or two sections start on a fresh page, chosen
-         so the page they leave is well filled and the last page is safe. A fresh page also resets the estimate's error. */
+         page may be left near-empty, a page in the middle must not look hollow, no table leaves a stray row. Long tables
+         and the side-by-side parts split across pages by themselves (rows stay whole, headings repeat). The layouts
+         tried, in order of preference: spacing a little tighter or looser; the side-by-side parts laid out one after
+         another; last, a section on a fresh page, only where the page it leaves is at least 70 % full. */
       const nightTxt = 'Work of ' + dmy(R.period.day) + ' (day) and night of ' + R.period.night.split('/').map(d => d.slice(8, 10)).join('/') + '.' + D.slice(5, 7) + '.' + D.slice(0, 4);
-      const groups = [
-        [...letterhead('MORNING POSITION', nightTxt), abstract, ...abstractNote, pair([...s1, ...s2], s3)],
-        s4, [pair([...s5, ...s6], s7)], s11, s12, s13, s14];
-      const ERR = h => 0.06 * h + 300;                       // twips Word may run longer or shorter, for h twips laid out
-      const LAST_MIN = 0.30, LEFT_MIN = 0.45, MAX = 0.98;    // last page / page left by a fresh-page start: worst-case fill
-      const plan = brk => {
-        let st = { y: 0, pages: 1 }, since = 0, score = Infinity; const starts = [], left = [];
+      const head0 = [...letterhead('MORNING POSITION', nightTxt), abstract, ...abstractNote];
+      const right57 = noNi ? s67 : s7, left57 = noNi ? s5 : [...s5, ...s6];
+      const ARR = [{ name: 'side by side', cost: 0, g: [[...head0, ...pair([...s1, ...s2], s3)], s4, pair(left57, right57)] },
+        { name: '5–7 one after another', cost: 1.5, g: [[...head0, ...pair([...s1, ...s2], s3)], s4, [...left57, ...right57]] },
+        { name: '1–3 one after another', cost: 3, g: [[...head0, ...s1, ...s2, ...s3], s4, pair(left57, right57)] },
+        { name: '1–3 and 5–7 one after another', cost: 4.5, g: [[...head0, ...s1, ...s2, ...s3], s4, [...left57, ...right57]] }]
+        .map(a => Object.assign(a, { g: [...a.g, s11, s12, s13, s14] }));
+      const ERR = h => 0.045 * h + 300;                      // twips Word may run longer or shorter, for h twips laid out (measured: within 3 %)
+      const plan = (arr, brk) => {
+        const groups = arr.g;
+        let st = { y: 0, pages: 1 }, since = 0; const starts = [], left = [], fills = [];
+        let worst = Infinity, over = false;
         groups.forEach((g, i) => {
           if (brk.includes(i)) {
             const f = st.y / PH, e = ERR(since) / PH;
-            score = Math.min(score, f - e - LEFT_MIN, MAX - f - e); left.push(Math.round(f * 100));
-            st = { y: 0, pages: st.pages + 1 }; since = 0;
+            worst = Math.min(worst, f - 0.70, 0.98 - f - e); left.push(Math.round(f * 100));
+            fills.push(st.y); st = { y: 0, pages: st.pages + 1 }; since = 0;
           }
-          const y0 = st; st = flow(g, st.y, st.pages); since += (st.pages - y0.pages) * PH + st.y - y0.y;
+          const y0 = st; st = flow(g, st.y, st.pages, fills); over = over || st.over; since += (st.pages - y0.pages) * PH + st.y - y0.y;
           starts.push(y0.y + 700 > PH ? y0.pages + 1 : y0.pages);      // a heading low on a page goes over with its section
         });
         const f = st.y / PH, e = ERR(since) / PH;
-        return { brk, left, pages: st.pages, end: f, err: e, score: Math.min(score, f - e - LAST_MIN, MAX - f - e), starts,
-          emptiest: Math.min(f, ...left.map(x => x / 100)) };          // among safe layouts of equal cost: the fullest pages win
+        const pagesF = fills.map(x => Math.round(x / PH * 100));
+        // the last page: at least 45 % full as estimated, never near-empty or spilling a sliver in the worst case
+        const lastOk = Math.min(f - 0.45, f - e - 0.25, 0.98 - f - e), lastLoose = Math.min(f - 0.35, f - e - 0.25, 0.98 - f - e);
+        return { arr, brk, left, pages: st.pages, end: f, err: e, fills: pagesF, starts,
+          ok: !over && Math.min(worst, lastOk) >= 0, okLoose: !over && Math.min(worst, lastLoose) >= 0, score: Math.min(worst, lastLoose) - (over ? 9 : 0),
+          middle: pagesF.length ? Math.min(...pagesF) : 100 };      // among layouts of equal cost: the fullest middle pages win
       };
       const cands = [[]];
-      for (let i = 1; i < groups.length; i++) { cands.push([i]); for (let j = i + 1; j < groups.length; j++) cands.push([i, j]); }
-      const plans = cands.map(plan);
+      for (let i = 1; i < ARR[0].g.length; i++) { cands.push([i]); for (let j = i + 1; j < ARR[0].g.length; j++) cands.push([i, j]); }
+      const plans = ARR.flatMap(a => cands.map(b => plan(a, b)));
       const footer = new Footer({ children: [
         new Paragraph({ alignment: C, children: [
           run('Page ', { size: 16 }), new TextRun({ children: [PageNumber.CURRENT], font: FONT, size: 16 }),
           run(' of ', { size: 16 }), new TextRun({ children: [PageNumber.TOTAL_PAGES], font: FONT, size: 16 }),
           run('   ·   Generated ' + (R.generatedAt || '') + (R.generatedBy ? ' by ' + R.generatedBy : ''), { size: 14 })] }),
         new Paragraph({ alignment: C, children: [new TextRun({ text: CREDIT, font: FONT, size: 13, color: '808080' })] })] });
-      const build = p => groups.flatMap((g, i) => p.brk.includes(i) ? [para('', { exact: 20, pageBreakBefore: true }), ...g] : g);
+      const build = p => p.arr.g.flatMap((g, i) => p.brk.includes(i) ? [para('', { exact: 20, pageBreakBefore: true }), ...g] : g);
       return { plans, build, footer };
     };
 
     /* ---------- choosing the layout ----------
-       Normal density first; slightly tighter or looser spacing, or a section on a fresh page, only when the natural end
-       is not safe. A fresh page costs more than a small change of spacing, as it leaves white space mid-report. */
-    const DENSITY = [{ name: 'normal', pad: 20, sec: 110, cost: 0 }, { name: 'tight', pad: 12, sec: 80, cost: 1 }, { name: 'loose', pad: 30, sec: 140, cost: 1 },
-      { name: 'tighter', pad: 5, sec: 60, cost: 2 }, { name: 'looser', pad: 42, sec: 170, cost: 2 }];
-    let pick = null, fallback = null;
+       Cheapest safe layout wins: spacing a little tighter or looser (0.5–2.5), 5–7 one after another (1.5), 1–3 one
+       after another (3), a fresh page (10 each), and a page before the last under 85 % full (1 for every 4 %). Equal cost: the fullest middle pages, then the fuller last page. If nothing
+       meets the 45 % last-page rule, a last page down to 35 % is accepted before anything worse. */
+    const DENSITY = [{ name: 'normal', pad: 20, sec: 110, cost: 0 },
+      { name: 'a little tight', pad: 15, sec: 90, cost: 0.5 }, { name: 'a little loose', pad: 25, sec: 125, cost: 0.5 },
+      { name: 'tight', pad: 10, sec: 75, cost: 1 }, { name: 'loose', pad: 32, sec: 145, cost: 1 },
+      { name: 'tighter', pad: 5, sec: 60, cost: 2 }, { name: 'looser', pad: 44, sec: 175, cost: 2 }, { name: 'loosest', pad: 58, sec: 210, cost: 2.5 }];
+    const all = [];
     (opts.density ? DENSITY.filter(d => d.name === opts.density) : DENSITY).forEach(dz => {
       const c = compose(dz);
-      c.plans.forEach(p => {
-        const cost = dz.cost + 1.5 * p.brk.length, cand = { c, p, dz, cost };
-        if (p.score >= 0 && (!pick || cost < pick.cost || (cost === pick.cost && p.emptiest > pick.p.emptiest))) pick = cand;
-        if (!fallback || p.score > fallback.p.score) fallback = cand;
-      });
+      c.plans.forEach(p => all.push({ c, p, dz, cost: dz.cost + p.arr.cost + 10 * p.brk.length + Math.max(0, 85 - p.middle) / 4 }));
     });
-    pick = pick || fallback;
+    const better = (x, y) => x.cost - y.cost || y.p.middle - x.p.middle || y.p.end - x.p.end;
+    const pick = all.filter(x => x.p.ok).sort(better)[0] || all.filter(x => x.p.okLoose).sort(better)[0] || all.sort((x, y) => y.p.score - x.p.score)[0];
     const best = pick.p, kids = pick.c.build(best), footer = pick.c.footer;
     const layout = ['report ends ' + Math.round(best.end * 100) + '% down page ' + best.pages + ' (±' + Math.round(best.err * 100) + '%)',
-      pick.dz.name + ' spacing, ' + (best.brk.length ? 'fresh page before part ' + best.brk.join(', ') + ', leaving ' + best.left.map(x => x + '%').join(', ') : 'no forced page break'),
-      best.score >= 0 ? 'safe' : 'CHECK: no safe page ending found'];
+      'pages ' + [...best.fills, Math.round(best.end * 100)].map(x => x + '%').join(' · '),
+      pick.dz.name + ' spacing, ' + best.arr.name + ', ' + (best.brk.length ? 'fresh page before part ' + best.brk.join(', ') : 'no forced page break'),
+      best.ok ? 'safe' : best.okLoose ? 'safe, last page under 45 %' : 'CHECK: no safe page ending found'];
     const PAGE = { size: { width: 11906, height: 16838 }, margin: { top: 567, bottom: 800, left: 567, right: 567, footer: 240 } };
-    if (opts.onLayout) opts.onLayout({ density: pick.dz.name, pages: best.pages, end: best.end, err: best.err, score: best.score, breaks: best.brk, left: best.left, starts: best.starts, layout });
+    if (opts.onLayout) opts.onLayout({ density: pick.dz.name, arrangement: best.arr.name, pages: best.pages, end: best.end, err: best.err, ok: best.ok, okLoose: best.okLoose,
+      score: best.score, breaks: best.brk, left: best.left, fills: best.fills, starts: best.starts, layout });
 
     return new Document({
       creator: 'AEN Morning Position', title: 'Morning Position ' + R.aen + ' ' + D.split('-').reverse().join('.'),

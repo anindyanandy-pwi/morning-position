@@ -8,7 +8,8 @@
   function buildMorningDoc(X, R, opts) {
     opts = opts || {};
     const { Document, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, ShadingType,
-      AlignmentType, VerticalAlign, Footer, PageNumber, TableLayoutType, HeightRule, UnderlineType, TabStopType, ImageRun, LineRuleType } = X;
+      AlignmentType, VerticalAlign, Footer, PageNumber, TableLayoutType, HeightRule, UnderlineType, TabStopType, ImageRun, LineRuleType,
+      HorizontalPositionRelativeFrom, VerticalPositionRelativeFrom, TextWrappingType, LeaderType } = X;
 
     const CREDIT = 'Designed & developed by Anindya Nandy, SSE/P.Way/Planning, Howrah Division';
     const W = 10772, FONT = 'Arial', SZ = 19, GREY = 'D9D9D9';
@@ -35,7 +36,7 @@
         const spacing = { before: o.before || 0, after: o.after || 0 };
         if (o.exact) { spacing.line = o.exact; spacing.lineRule = LineRuleType.EXACT; }
         const p = new Paragraph({ children: kids, alignment: o.align || L, spacing, keepNext: !!o.keepNext, tabStops: o.tabs, pageBreakBefore: !!o.pageBreakBefore });
-        p._runs = kids; p._sp = (o.before || 0) + (o.after || 0); p._kn = !!o.keepNext; if (o.exact) p._h = o.exact + p._sp; return p;
+        p._runs = kids; p._sp = (o.before || 0) + (o.after || 0); p._kn = !!o.keepNext; if (o.sec) p._sec = o.sec; if (o.exact) p._h = o.exact + p._sp; return p;
       };
 
       /* ---------- page filling estimate (twips) ----------
@@ -99,7 +100,7 @@
       const section = (no, title, note, late) => para([run(no + '.  ', { bold: true, size: 21 }), run(title, { bold: true, underline: true, size: 21 }),
         ...(note || late ? [run('  (' + (note || ''), { size: 17, italics: true }),
           ...(late ? [run((note ? ', ' : '') + 'older data: ' + late, { size: 17, italics: true, bold: true })] : []), run(')', { size: 17, italics: true })] : [])],
-        { before: DZ.sec, after: 50, keepNext: true });
+        { before: DZ.sec, after: 50, keepNext: true, sec: [no] });
       const nightOf = (from, to) => from && to ? from.slice(8, 10) + '/' + dmy(to) : (to ? dmy(to) : '');
       const notYet = what => what + ' not yet in the sheet';
       const half = (W - 240) / 2;
@@ -109,7 +110,8 @@
       const pairT = (left, right) => table([half, 240, half], [TR({ cantSplit: true, children: [
         cell(left, half, { borders: NONE, valign: VerticalAlign.TOP }), cell([para('')], 240, { borders: NONE }),
         cell(right, half, { borders: NONE, valign: VerticalAlign.TOP })] })], { keep: false });
-      const pair = (left, right) => [para('', { exact: 40, keepNext: true }), pairT(left, right)];
+      const pair = (left, right) => { const t = pairT(left, right); t._secs = [...left, ...right].flatMap(e => e._sec || []);
+        return [para('', { exact: 40, keepNext: true }), t]; };
       // (pair's height: the taller of its two sides, each a list of paragraphs and tables)
       const nilLine = (text) => para([run(text, { size: SZ })], { after: 20 });
       const problem = (s) => para([run('Could not be read: ', { bold: true, size: 18 }), run(s.error, { italics: true, size: 18 })], { after: 20 });
@@ -247,7 +249,7 @@
         s5.push(table(bw, [H(['Total LCs', 'Open > 15 days', 'Open > 20 days', 'TDC'], bw), Rw([r.total, r.d15, r.d20, r.tdc], bw, ['c', 'c', 'c', 'c'])])); }
       // tabs 42 and 37 list only the AENs with NI LC gates; for the others sections 6 and 7 are one line
       const noNi = !S.niLc && !S.cctv;
-      const s67 = [para([run('6–7.  ', { bold: true, size: 21 }), run('Sections 6 and 7 not applicable: no NI LC gates under AEN/' + R.aen + '.', { size: 19 })], { before: DZ.sec, after: 50 })];
+      const s67 = [para([run('6–7.  ', { bold: true, size: 21 }), run('Sections 6 and 7 not applicable: no NI LC gates under AEN/' + R.aen + '.', { size: 19 })], { before: DZ.sec, after: 50, sec: [6, 7] })];
       const s6 = [section(6, 'NI LC inspection', ok('niLc') ? 'as on ' + dmy(S.niLc.dataDate) : null, ok('niLc') && S.niLc.stale ? notYet('as on ' + dmy(R.period.day)) : null)];
       if (!S.niLc) s6.push(nilLine('Not applicable to AEN/' + R.aen));
       else if (!ok('niLc')) s6.push(problem(S.niLc));
@@ -344,11 +346,13 @@
 
       /* ---------- page filling: where the main report ends ---------- */
       // Walk the main report as Word would: rows that cannot split move to the next page (with the table's header row repeated).
-      const flow = (els, y0, p0, fills) => {
-        let y = y0 || 0, pages = p0 || 1, carry = 0, over = false;   // carry: headings kept with what follows them
-        fills = fills || [];                                  // how full each finished page is (twips)
-        const add = (h, canSplit) => {
+      const flow = (els, y0, p0, fills, secs) => {
+        let y = y0 || 0, pages = p0 || 1, carry = 0, over = false, waiting = [];   // carry: headings kept with what follows them
+        fills = fills || []; secs = secs || {};               // how full each finished page is (twips); page where each section starts
+        const add = (h, canSplit, own) => {
           h += carry; carry = 0;
+          const at = y + h <= PH || canSplit ? pages : pages + 1;
+          [...waiting, ...(own || [])].forEach(n => { if (!(n in secs)) secs[n] = at; }); waiting = [];
           if (y + h <= PH) { y += h; return; }
           if (!canSplit) { if (h > PH) over = true; fills.push(y); pages++; y = h; return; }
           h -= PH - y; fills.push(PH); pages++; while (h > PH) { h -= PH; fills.push(PH); pages++; } y = h;
@@ -359,11 +363,11 @@
             for (let i = 0; i < rs.length;) {
               let j = i, h = rs[i]._h;
               while (rs[j]._keep && j + 1 < rs.length) { j++; h += rs[j]._h; }
-              const before = pages; add(h, j === i && !rs[i]._cant); if (pages > before && head && !rs[i]._head) y += head;
+              const before = pages; add(h, j === i && !rs[i]._cant, i === 0 ? el._secs : null); if (pages > before && head && !rs[i]._head) y += head;
               i = j + 1;
             }
-          } else if (el._kn) carry += paraH(el, W);
-          else add(paraH(el, W), false);
+          } else if (el._kn) { carry += paraH(el, W); if (el._sec) waiting.push(...el._sec); }
+          else add(paraH(el, W), false, el._sec);
         });
         if (carry) add(0, false);
         return { pages, y, fills, over };
@@ -387,7 +391,7 @@
       const ERR = h => 0.045 * h + 300;                      // twips Word may run longer or shorter, for h twips laid out (measured: within 3 %)
       const plan = (arr, brk) => {
         const groups = arr.g;
-        let st = { y: 0, pages: 1 }, since = 0; const starts = [], left = [], fills = [];
+        let st = { y: 0, pages: 1 }, since = 0; const starts = [], left = [], fills = [], secs = {};
         let worst = Infinity, over = false;
         groups.forEach((g, i) => {
           if (brk.includes(i)) {
@@ -395,14 +399,14 @@
             worst = Math.min(worst, f - 0.70, 0.98 - f - e); left.push(Math.round(f * 100));
             fills.push(st.y); st = { y: 0, pages: st.pages + 1 }; since = 0;
           }
-          const y0 = st; st = flow(g, st.y, st.pages, fills); over = over || st.over; since += (st.pages - y0.pages) * PH + st.y - y0.y;
+          const y0 = st; st = flow(g, st.y, st.pages, fills, secs); over = over || st.over; since += (st.pages - y0.pages) * PH + st.y - y0.y;
           starts.push(y0.y + 700 > PH ? y0.pages + 1 : y0.pages);      // a heading low on a page goes over with its section
         });
         const f = st.y / PH, e = ERR(since) / PH;
         const pagesF = fills.map(x => Math.round(x / PH * 100));
         // the last page: at least 45 % full as estimated, never near-empty or spilling a sliver in the worst case
         const lastOk = Math.min(f - 0.45, f - e - 0.25, 0.98 - f - e), lastLoose = Math.min(f - 0.35, f - e - 0.25, 0.98 - f - e);
-        return { arr, brk, left, pages: st.pages, end: f, err: e, fills: pagesF, starts,
+        return { arr, brk, left, pages: st.pages, end: f, err: e, fills: pagesF, starts, secs,
           ok: !over && Math.min(worst, lastOk) >= 0, okLoose: !over && Math.min(worst, lastLoose) >= 0, score: Math.min(worst, lastLoose) - (over ? 9 : 0),
           middle: pagesF.length ? Math.min(...pagesF) : 100 };      // among layouts of equal cost: the fullest middle pages win
       };
@@ -439,14 +443,93 @@
       'pages ' + [...best.fills, Math.round(best.end * 100)].map(x => x + '%').join(' · '),
       pick.dz.name + ' spacing, ' + best.arr.name + ', ' + (best.brk.length ? 'fresh page before part ' + best.brk.join(', ') : 'no forced page break'),
       best.ok ? 'safe' : best.okLoose ? 'safe, last page under 45 %' : 'CHECK: no safe page ending found'];
+
+    /* ---------- the top sheet (page 1) ----------
+       docs/top-sheet-final.dc.html, drawn at 794 x 1123 px for A4: 1 px = 15 twips. The frame, the seal, the short rule
+       and the CONTENTS rule are pictures rendered once (tools/render-cover-art.js); all text is Word text. Every line has
+       an exact height, so the page is laid out the same in any Word, and the gaps are stretched or shrunk together so
+       the contents reach the footer, as on the design. */
+    const topSheet = secs => {
+      const art = opts.cover || {}, px = v => Math.round(v * 15), INK = '141414', SOFT = '3B3B3B';
+      const SERIF = 'Georgia', HIN = 'Nirmala UI';
+      const CW = px(794 - 2 * 80.2), TOP = px(66.2), FOOT = px(1123 - 1068.8), BOT = FOOT + px(26);
+      const AVAIL = 16838 - TOP - BOT;
+      const t = (text, o = {}) => new TextRun({ text, font: o.font ? { ascii: o.font, hAnsi: o.font, cs: o.font } : FONT, size: Math.round((o.px || 14) * 1.5),
+        sizeComplexScript: Math.round((o.px || 14) * 1.5), bold: !!o.bold, boldComplexScript: !!o.bold, italics: !!o.italic, color: o.color || INK,
+        characterSpacing: o.track ? px((o.px || 14) * o.track) : undefined });
+      const img = (data, w, h) => data ? new ImageRun({ type: 'png', data, transformation: { width: w, height: h } }) : new TextRun('');
+      // the stack under the seal: [gap above (px), line height (px), runs]
+      const name = ((R.office || '').match(/[,/]\s*([^,/(]+?)\s*\(/) || [, R.aen])[1].toUpperCase();
+      const day = new Date(D + 'T00:00:00Z'), MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+      const dateLong = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][day.getUTCDay()] + ', ' + day.getUTCDate() + ' ' + MONTHS[day.getUTCMonth()] + ' ' + day.getUTCFullYear();
+      const d1 = R.period.day, dd = iso => iso.slice(8, 10) + '.' + iso.slice(5, 7);
+      const stack = [
+        [16, 16, [t('EASTERN RAILWAY · HOWRAH DIVISION', { px: 12.7, track: 0.32 })]],
+        [2, 21, [t('पूर्व रेलवे · हावड़ा मंडल', { px: 15, font: HIN, color: SOFT })]],
+        [12, 64, [t('Morning Position', { px: 57.3, font: SERIF, bold: true })]],
+        [0, 30, [t('प्रातःकालीन स्थिति', { px: 20, font: HIN, bold: true })]],
+        [14, 12, [img(art.rule, 400, 12)]],
+        [14, 22, [t('AEN/' + R.aen + ' · ' + name, { px: 18, bold: true, track: 0.08 })]],
+        [3, 18, [t('Units: ' + R.units.map(u => 'SSE/P.Way/' + u).join(', '), { px: 14, color: SOFT })]],
+        [8, 30, [t(dateLong, { px: 24, font: SERIF })]],
+        [2, 20, [t('the day of ' + dd(d1) + ' and the night of ' + d1.slice(8, 10) + '/' + dd(D), { px: 15, font: SERIF, italic: true, color: SOFT })]],
+        [20, 16, [img(art.contents, 634, 16)]]];
+      // the contents: the sections in this report, with the page each starts on (the top sheet is page 1)
+      const has = n => n in secs, pg = n => String(secs[n] + 1);
+      const ITEMS = [[1, 'Mini control exceptions', [['AEN mini control items'], ['PWI mini control items', 'deferred'], ...(has('1c') ? [['IOW mini control items']] : [])]],
+        [2, 'Winter patrolling'], [3, S.pir ? 'Failures and PIRs' : 'Failures'], [4, 'Cautions and TDC overdue'], [5, 'Bad road surface at LC gates'],
+        [6, 'NI LC inspection'], [7, 'CCTV recording check'], [8, 'Spot attention due'],
+        [9, 'Work planned for the next day', [['Track-circuited area'], ['Non track-circuited area']]], [10, 'Inspections due'], [11, 'KPI items'],
+        [12, 'Blocks availed and output'], [13, 'Machine utilisation'], [14, 'TMS dashboard'], [15, 'Worksite entry in TMS'],
+        [16, 'Worksite safety arrangement', [['PWI unit-wise'], ...(S.iowSafety ? [['IOW unit-wise']] : [])]], [17, 'Weekly position']];
+      const saturday = day.getUTCDay() === 6;
+      const shown = ITEMS.filter(([n]) => has(n) || (n === 17 && saturday));
+      const colW = Math.floor((CW - px(40)) / 2), numT = px(30);
+      // each contents line: [gap above (px), line height (px), paragraph maker]
+      const line = (n, title, page, grey) => o => new Paragraph({ tabStops: [{ type: TabStopType.LEFT, position: numT }, { type: TabStopType.RIGHT, position: colW, leader: LeaderType.DOT }],
+        spacing: o, children: [t(String(n), { px: 14, font: SERIF, bold: true, color: grey ? '6B6B6B' : INK }), t('\t' + title, { px: 14, color: grey ? '6B6B6B' : INK }),
+          t('\t', { px: 14, color: grey ? 'B0B0B0' : '888888' }), page === null ? t('Saturdays only', { px: 12.5, italic: true, color: '6B6B6B' }) : t(page, { px: 14 })] });
+      const subLine = (title, note) => o => new Paragraph({ indent: { left: numT }, tabStops: [{ type: TabStopType.RIGHT, position: colW }], spacing: o,
+        children: [t(title, { px: 12.5, color: '2B2B2B' }), ...(note ? [t('\t' + note, { px: 12.5, italic: true, color: '6B6B6B' })] : [])] });
+      const lines = it => { const [n, title, subs] = it;
+        return [[8, 17, line(n, title, n === 17 ? null : pg(n), n === 17)], ...(subs || []).map(([st, note], i) => [i ? 3 : 2, 15, subLine(st, note)])]; };
+      const colL = shown.filter(i => i[0] <= 8).flatMap(lines), colR = shown.filter(i => i[0] > 8).flatMap(lines);
+      [colL, colR].forEach(c => { if (c.length) c[0][0] = 14; });
+      // stretch (or shrink) every gap by the same factor so the contents end at the footer, as on the design
+      const SEAL = 256, sum = a => a.reduce((x, y) => x + y, 0);
+      const fixedPx = SEAL + sum(stack.map(x => x[1])), gapPx = sum(stack.map(x => x[0]));
+      const colH = c => [sum(c.map(x => x[1])), sum(c.map(x => x[0]))], [lh, lg] = colH(colL), [rh, rg] = colH(colR);
+      const roomPx = AVAIL / 15 - 4;
+      let k = 1; for (const tryK of [2.4, 2.2, 2, 1.8, 1.6, 1.5, 1.4, 1.3, 1.2, 1.1, 1, 0.9, 0.8, 0.7, 0.6]) {
+        if (fixedPx + gapPx * tryK + Math.max(lh + lg * tryK, rh + rg * tryK) <= roomPx) { k = tryK; break; } k = tryK; }
+      const exact = (gap, h) => ({ before: px(gap * k), after: 0, line: px(h), lineRule: LineRuleType.EXACT });
+      const frame = art.frame ? new ImageRun({ type: 'png', data: art.frame, transformation: { width: 794, height: 1123 },
+        floating: { horizontalPosition: { relative: HorizontalPositionRelativeFrom.PAGE, offset: 0 }, verticalPosition: { relative: VerticalPositionRelativeFrom.PAGE, offset: 0 },
+          behindDocument: true, allowOverlap: true, lockAnchor: true, wrap: { type: TextWrappingType.NONE } } }) : null;
+      const kidsC = [new Paragraph({ alignment: C, spacing: { before: 0, after: 0 }, children: [...(frame ? [frame] : []), img(art.seal, SEAL, SEAL)] }),
+        ...stack.map(([g, h, runs]) => new Paragraph({ alignment: C, spacing: exact(g, h), children: runs }))];
+      const col = c => new TableCell({ width: { size: colW, type: WidthType.DXA }, borders: NONE, margins: { top: 0, bottom: 0, left: 0, right: 0 },
+        children: c.length ? c.map(([g, h, mk]) => mk(exact(g, h))) : [new Paragraph('')] });
+      kidsC.push(new Table({ width: { size: CW, type: WidthType.DXA }, columnWidths: [colW, CW - 2 * colW, colW], layout: TableLayoutType.FIXED,
+        rows: [new TableRow({ cantSplit: true, children: [col(colL), new TableCell({ width: { size: CW - 2 * colW, type: WidthType.DXA }, borders: NONE, children: [new Paragraph('')] }), col(colR)] })] }));
+      const at = (R.generatedAt || '').slice(11, 16);
+      const footerC = new Footer({ children: [new Paragraph({ tabStops: [{ type: TabStopType.RIGHT, position: CW }], children: [
+        t('Prepared by Engg/CNL, Howrah' + (at ? ' · ' + at : ''), { px: 11, color: '555555' }),
+        t('\tDesigned & developed by Anindya Nandy · SSE/P.Way/Planning, Howrah Division', { px: 11, color: '555555' })] })] });
+      const usedPx = fixedPx + gapPx * k + Math.max(lh + lg * k, rh + rg * k);
+      return { children: kidsC, footer: footerC, fill: usedPx / roomPx, k, index: shown.map(([n]) => [n, n === 17 ? null : +pg(n)]),
+        page: { size: { width: 11906, height: 16838 }, margin: { top: TOP, bottom: BOT, left: px(80.2), right: px(80.2), footer: FOOT } } };
+    };
+    const top = topSheet(best.secs);
     const PAGE = { size: { width: 11906, height: 16838 }, margin: { top: 567, bottom: 800, left: 567, right: 567, footer: 240 } };
-    if (opts.onLayout) opts.onLayout({ density: pick.dz.name, arrangement: best.arr.name, pages: best.pages, end: best.end, err: best.err, ok: best.ok, okLoose: best.okLoose,
-      score: best.score, breaks: best.brk, left: best.left, fills: best.fills, starts: best.starts, layout });
+    if (opts.onLayout) opts.onLayout({ cover: { fill: top.fill, k: top.k, index: top.index }, density: pick.dz.name, arrangement: best.arr.name, pages: best.pages, end: best.end, err: best.err, ok: best.ok, okLoose: best.okLoose,
+      score: best.score, breaks: best.brk, left: best.left, fills: best.fills, starts: best.starts, secs: best.secs, layout });
 
     return new Document({
       creator: 'AEN Morning Position', title: 'Morning Position ' + R.aen + ' ' + D.split('-').reverse().join('.'),
       styles: { default: { document: { run: { font: FONT, size: SZ } } } },
-      sections: [{ properties: { page: PAGE }, footers: { default: footer }, children: kids }]
+      sections: [{ properties: { page: top.page }, footers: { default: top.footer }, children: top.children },
+        { properties: { page: PAGE }, footers: { default: footer }, children: kids }]
     });
   }
   g.buildMorningDoc = buildMorningDoc;

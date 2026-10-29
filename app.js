@@ -103,8 +103,13 @@
   /* ---------- Word file ---------- */
   let logoBytes = null;   // the Indian Railways logo for the letterhead, fetched once
   const getLogo = async () => { if (!logoBytes) { try { logoBytes = new Uint8Array(await (await fetch('ir-logo-256.png')).arrayBuffer()); } catch (e) { logoBytes = null; } } return logoBytes; };
+  // the top sheet's artwork (tools/render-cover-art.js); a picture that cannot be loaded is left out, the text still comes
+  let coverArt = null;
+  const getCover = async () => { if (!coverArt) { coverArt = {};
+    for (const k of ['frame', 'seal', 'rule', 'contents']) { try { coverArt[k] = new Uint8Array(await (await fetch('cover-' + k + '.png')).arrayBuffer()); } catch (e) { coverArt[k] = null; } } }
+    return coverArt; };
   async function saveDocx(R) {
-    const blob = await docx.Packer.toBlob(buildMorningDoc(docx, R, { logo: await getLogo() }));
+    const blob = await docx.Packer.toBlob(buildMorningDoc(docx, R, { logo: await getLogo(), cover: await getCover() }));
     const a = el('a'); a.href = URL.createObjectURL(blob);
     a.download = 'Morning_Position_AEN-' + R.aen.replace('/', '-') + '_' + dmy(R.date) + '.docx';
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 30000);

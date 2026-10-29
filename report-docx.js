@@ -258,6 +258,24 @@
             ...(c.zeroRemark ? [['Remarks against zero figure', c.zeroRemark]] : [])])); }
         add(head(7, 'CCTV recording check', ok('cctv') ? 'data of ' + dmy(S.cctv.dataDate) : null, ok('cctv') && S.cctv.stale ? notYet(dmy(R.period.day)) : null), p7);
       }
+      /* 9. work planned: the plan for the report day itself, from the AEN's tab of the work plan sheet */
+      if (S.workPlan) {
+        const wp = S.workPlan, parts = [];
+        if (!wp.ok) parts.push(ERRP(wp));
+        else if (!wp.entered) parts.push(NOTE([['Work plan for ' + dmy(D) + ' not entered yet', { bold: true }]]));
+        else {
+          const cols = [{ h: 'Sl.', a: 'c', one: true }, { h: 'PWI unit' }, { h: 'Line', a: 'c' }, { h: 'Location' }, { h: 'Work', free: true }, { h: 'Station / section' },
+            { h: 'Agency', free: true }, { h: 'Supervisor', free: true }, { h: 'Men', a: 'c', one: true }, { h: 'Infringing', a: 'c' }];
+          const tbl = rs => T(cols, rs.map((r, i) => [String(i + 1), r.unit, r.line, r.location, r.work, r.station, r.agency, r.supervisor || '–', r.manpower || '–', r.infringing || '–']), { size: 17, hsize: 17 });
+          [['Track-circuited area', x => x.tc === 'tc'], ['Non track-circuited area', x => x.tc !== 'tc']].forEach(([label, f]) => {
+            const rs = wp.rows.filter(f);
+            parts.push(...(rs.length ? [SUB(label + ' (' + rs.length + ' worksite' + (rs.length > 1 ? 's' : '') + ')'), tbl(rs)] : [KV([[label, 'Nil']])]));
+          });
+          const odd = wp.rows.filter(x => x.tc === 'unclear');
+          if (odd.length) parts.push(NOTE([['Note: ', { bold: true, size: 17 }], ['"Whether track circuit" not clear for ' + odd.map(x => x.location || x.work).join('; ') + ' (entered as ' + [...new Set(odd.map(x => '"' + x.tcRaw + '"'))].join(', ') + '); listed as non track-circuited.', { italics: true, size: 17 }]], { before: 20 }));
+        }
+        add(head(9, 'Work planned for the next day', 'plan for ' + dmy(D) + (wp.ok && wp.inferredDate ? ', its date taken from the next day\'s heading' : '')), parts);
+      }
       /* 11. KPI items */
       {
         const parts = [];

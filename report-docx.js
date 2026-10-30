@@ -313,7 +313,7 @@
         if (!wp.ok) parts.push(ERRP(wp));
         else if (!wp.entered) parts.push(NOTE([['Work plan for ' + dmy(D) + ' not entered yet', { bold: true }]]));
         else {
-          const cols = [{ h: 'Sl.', a: 'c', one: true }, { h: 'PWI unit' }, { h: 'Line', a: 'c' }, { h: 'Location' }, { h: 'Work', free: true }, { h: 'Station / section' },
+          const cols = [{ h: 'Sl.', a: 'c', one: true }, { h: 'PWI unit' }, { h: 'Line', a: 'c' }, { h: 'Location', free: true }, { h: 'Work', free: true }, { h: 'Station / section', free: true },
             { h: 'Agency', free: true }, { h: 'Supervisor', free: true }, { h: 'Men', a: 'c', one: true }, { h: 'Infringing', a: 'c' }];
           const tbl = rs => T(cols, rs.map((r, i) => [String(i + 1), r.unit, r.line, r.location, r.work, r.station, r.agency, r.supervisor || '–', r.manpower || '–', r.infringing || '–']), { size: 17, hsize: 17 });
           [['Track-circuited area', x => x.tc === 'tc'], ['Non track-circuited area', x => x.tc !== 'tc']].forEach(([label, f]) => {
@@ -323,7 +323,8 @@
           const odd = wp.rows.filter(x => x.tc === 'unclear');
           if (odd.length) parts.push(NOTE([['Note: ', { bold: true, size: 17 }], ['"Whether track circuit" not clear for ' + odd.map(x => x.location || x.work).join('; ') + ' (entered as ' + [...new Set(odd.map(x => '"' + x.tcRaw + '"'))].join(', ') + '); listed as non track-circuited.', { italics: true, size: 17 }]], { before: 20 }));
         }
-        add(head(9, 'Work planned for the next day', 'plan for ' + dmy(D) + (wp.ok && wp.inferredDate ? ', its date taken from the next day\'s heading' : '')), parts);
+        add(head(9, 'Work planned for the next day', 'plan for ' + dmy(D) + (wp.ok && wp.inferredDate ? ', its date taken from the next day\'s heading' : '')), parts,
+          { wide: !!(wp.ok && wp.entered && wp.rows.length) });     // ten columns need the full width; long locations and stations wrap
       }
       /* 10. inspections due — TMS plans inspections by month: what is planned for this month and not yet done, per SSE and
          JE (and the AEN's own), with any planned in earlier months and still not done (§6, option a) */
@@ -352,15 +353,24 @@
         if (!ok('kpi')) parts.push(ERRP(S.kpi));
         else {
           const U = S.kpi.units, list = (a, max) => !a || !a.length ? 'Nil' : a.length + ': ' + a.slice(0, max).join(', ') + (a.length > max ? ' …' : '');
+          const frac = (n, f) => f ? n + ' ' + f.done + '/' + f.total : null;
+          const chartDone = u => !u.chart ? 'Not received' : !u.chart.reaches ? 'Chart not yet received for this month'
+            : [frac('P&C', u.chart.pc), frac('LC', u.chart.lc), frac('LWR', u.chart.lwr), frac('Curves', u.chart.curves)].filter(Boolean).join(', ') || '–';
+          const gaps = (km, a) => val(km) + (a && a.length ? ' (' + a.slice(0, 3).join('; ') + (a.length > 3 ? ' …' : '') + ')' : '');
           const items = [['KPI marks, last month (out of 82)', u => val(u.lastMonth)], ['KPI marks, this month – forecast (out of 82)', u => val(u.thisMonth)],
-            ['KPIs with shortfall', u => u.shortfalls.length ? u.shortfalls.join(', ') : 'Nil'],
+            ['KPIs short of full marks', u => u.shortfalls.length ? u.shortfalls.join(', ') : 'Nil'],
             ['Inspections due this month (TMS plan)', u => list(u.due, 6)], ['Inspections planned earlier, not done', u => list(u.lateFromPlan, 6)],
             ['Inspections overdue', u => u.overdueCount ? u.overdueCount + ': ' + u.overdue.slice(0, 6).join(', ') + (u.overdue.length > 6 ? ' …' : '') : 'Nil'],
-            ['Foot plate inspection – km not covered', u => val(u.footPlate)], ['Trolley inspection – km not covered', u => val(u.trolley)],
+            ['Inspected this month (TMS inspection chart)', chartDone],
+            ['Foot plate inspection – km not covered this fortnight', u => gaps(u.footPlate, u.chart && u.chart.reaches ? u.chart.noFootPlate : [])],
+            ['Trolley inspection – km not covered (2 months)', u => u.trolleyLines && u.trolleyLines.length
+              ? val(u.trolley) + ' (still to walk, line by line: ' + u.trolleyLines.slice(0, 3).join('; ') + (u.trolleyLines.length > 3 ? ' …' : '') + ')'
+              : gaps(u.trolley, u.chart && u.chart.reaches ? u.chart.noTrolley : [])],
             ['Defects crossing 10 days', u => u.defects ? u.defects + ': ' + u.defectPlaces.slice(0, 4).join(', ') : 'Nil']];
           parts.push(T([{ h: 'Sl.', a: 'c', one: true }, { h: 'Item' }, ...U.map(u => ({ h: 'SSE/P.Way/' + u.label, a: 'c' }))], items.map(([t, f], i) => [String(i + 1), t, ...U.map(f)])));
+          if (S.kpi.warning) parts.push(NOTE([[S.kpi.warning, { italics: true, size: 18 }]]));
         }
-        add(head(11, 'KPI items', ok('kpi') && S.kpi.generatedAt ? 'TMS Control, ' + S.kpi.generatedAt : 'from TMS Control'), parts);
+        add(head(11, 'KPI items', ok('kpi') && S.kpi.generatedAt ? 'TMS Control, ' + dmy(S.kpi.generatedAt.slice(0, 10)) + ' ' + S.kpi.generatedAt.slice(11, 16) : 'from TMS Control'), parts);
       }
       /* 12. blocks */
       {
@@ -530,7 +540,12 @@
           return m; });
         const nat = cols.map((c, j) => Math.max(mn[j], (natW(c.h || '', hs, true) - PADX) / 2 + PADX, ...vals(j).map(x => natW(x, size))));
         let w = mn.slice(), rem = total - sum(w);
-        if (rem < 0) w = w.map(x => x * total / sum(mn));
+        if (rem < 0) {                                           // too wide even at the minimum: free text gives way first (a long
+          const fl = cols.map((c, j) => c.free ? Math.min(mn[j], Math.max(minW(c.h || '', hs, true), 600)) : mn[j]);   // word may break)
+          const give = sum(mn.map((x, j) => x - fl[j]));
+          if (give >= -rem) w = w.map((x, j) => x - (x - fl[j]) * -rem / give);
+          else { w = fl.slice(); w = w.map(x => x * total / sum(fl)); }
+        }
         else {
           const want = sum(nat.map((x, j) => x - w[j]));
           if (want <= rem) { w = nat.slice(); rem -= want; } else { w = w.map((x, j) => x + (nat[j] - x) * rem / want); rem = 0; }

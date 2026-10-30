@@ -29,7 +29,7 @@
       const val = v => v === null || v === undefined || v === '' ? '–' : (typeof v === 'number' ? (Number.isInteger(v) ? String(v) : v.toFixed(2)) : String(v));
       const tag = (r, text, size, bold, imgH) => { r._t = String(text); r._s = size || SZ; r._b = !!bold; if (imgH) r._img = imgH; return r; };
       const STRETCH = opts.testStretch || 1;     // tests only: print text larger than the estimate expects, to prove nothing spills
-      const run = (t, o = {}) => tag(new TextRun({ text: String(t), font: FONT, size: Math.round((o.size || SZ) * STRETCH), bold: !!o.bold, italics: !!o.italics,
+      const run = (t, o = {}) => tag(new TextRun({ text: String(t), font: FONT, size: Math.round((o.size || SZ) * STRETCH), bold: !!o.bold, italics: !!o.italics, color: o.color || undefined,
         underline: o.underline ? { type: UnderlineType.SINGLE } : undefined }), t, o.size, o.bold);
       const para = (t, o = {}) => {
         const kids = (Array.isArray(t) ? t : [t]).map(x => typeof x === 'string' ? run(x, o) : x);
@@ -336,10 +336,12 @@
         else if (!ip.designations.length) parts.push(KV([['Inspections planned for ' + mName, 'none in TMS for this AEN']]));
         else {
           const rows = [];
-          ip.designations.forEach(g => g.features.forEach((f, i) => rows.push([i ? ' ' : unitOf(g.name), f.feature, f.planned + ' / ' + f.done, list(f.notDone), list(f.overdue)])));
-          const open = ip.designations.reduce((a, g) => a + g.features.reduce((b, f) => b + f.notDone.length + f.overdue.length, 0), 0);
-          parts.push(T([{ h: 'SSE / JE' }, { h: 'Feature' }, { h: 'Planned / done', a: 'c', one: true }, { h: 'Not yet done this month', free: true }, { h: 'Overdue from earlier months', free: true }], rows, { size: 17, hsize: 17 }));
-          if (!open) parts.push(NOTE([['All inspections planned for ' + mName + ' so far done.', { italics: true, size: 17 }]], { before: 20 }));
+          // this month only (user, 30.10.2026: the "overdue from earlier months" column is not shown)
+          ip.designations.forEach(g => g.features.filter(f => f.planned).forEach((f, i) => rows.push([i ? ' ' : unitOf(g.name), f.feature, f.planned + ' / ' + f.done, list(f.notDone)])));
+          const open = ip.designations.reduce((a, g) => a + g.features.reduce((b, f) => b + f.notDone.length, 0), 0);
+          if (rows.length) parts.push(T([{ h: 'SSE / JE' }, { h: 'Feature' }, { h: 'Planned / done', a: 'c', one: true }, { h: 'Not yet done this month', free: true }], rows, { size: 17, hsize: 17 }));
+          else parts.push(KV([['Inspections planned for ' + mName, 'none in TMS for this AEN']]));
+          if (rows.length && !open) parts.push(NOTE([['All inspections planned for ' + mName + ' so far done.', { italics: true, size: 17 }]], { before: 20 }));
         }
         add(head(10, 'Inspections due', ip && ip.ok ? 'planned for ' + mName + ' in TMS, as on ' + dmy(ip.dataDate) : null, ip && ip.ok && ip.stale ? 'TMS reading of ' + dmy(D) + ' not yet sent' : null), parts,
           { wide: !!(ip && ip.ok && ip.designations.length) });     // asset lists need the full width
@@ -403,9 +405,14 @@
           ok('tms') && S.tms.stale ? 'the TMS reader has not sent the reading of ' + dmy(D) : null);
         if (!ok('tms')) add(h14, [ERRP(S.tms)]);
         else {
+          // user, 30.10.2026: spot attention (40) is section 8, not here; TSR and OMS (24-28) are left out; the Sl. column
+          // numbers the rows of the section 1, 2, 3 … in order (the TMS item numbers jumped about between the groups);
+          // a figure that got worse since the previous morning is red and bold, one that got better green and bold
           const GROUPS = [['Rails, welds and USFD', [1, 2, 16, 17, 18, 19, 34, 35, 38, 39]], ['Inspections and maintenance', [3, 4, 5, 6, 7, 8, 9, 10, 11, 36, 37, 41, 42]],
-            ['Defects pending', [12, 13, 14, 15, 40]], ['Track recording and speed restrictions', [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]], ['Asset renewal overdue', [31, 32, 33]]];
-          const known = GROUPS.reduce((a, g) => a.concat(g[1]), []), other = [...new Set(S.tms.rows.map(t => t.sn))].filter(n => known.indexOf(n) < 0);
+            ['Defects pending', [12, 13, 14, 15]], ['Track recording', [20, 21, 22, 23, 29, 30]], ['Asset renewal overdue', [31, 32, 33]]];
+          const LEFT_OUT = [24, 25, 26, 27, 28, 40], MORE_IS_BETTER = [34, 35, 36, 37, 38, 39];
+          const known = GROUPS.reduce((a, g) => a.concat(g[1]), LEFT_OUT), other = [...new Set(S.tms.rows.map(t => t.sn))].filter(n => known.indexOf(n) < 0);
+          let sl = 0;
           if (other.length) GROUPS.push(['Other items', other]);
           const pd = S.tms.prevDate ? dm(S.tms.prevDate) : 'Prev.', cd = dm(S.tms.curDate);
           const cols = [{ h: 'Sl.', a: 'c', one: true }, { h: 'Item', free: true }, { h: pd, a: 'c', one: true }, { h: cd, a: 'c', one: true }, { h: 'Diff.', a: 'c', one: true }];
@@ -415,7 +422,9 @@
             S.tms.rows.filter(t => sns.indexOf(t.sn) >= 0).sort((x, y) => x.sn - y.sn).forEach(t => {
               const first = t.sn !== last, label = first ? t.item + (t.sub ? ' – ' + t.sub : '') : '    ' + (t.sub || t.item);
               const c = (typeof t.prev === 'number' && typeof t.cur === 'number') ? Math.round((t.cur - t.prev) * 100) / 100 : null;
-              rows.push([first ? String(t.sn) : ' ', label, val(t.prev), t.error ? 'n/a' : val(t.cur), c ? (c > 0 ? '+' : '–') + val(Math.abs(c)) : '–']); last = t.sn;
+              const worse = c ? (MORE_IS_BETTER.indexOf(t.sn) >= 0 ? c < 0 : c > 0) : false, mark = c ? { bold: true, color: worse ? 'C00000' : '00843D' } : {};
+              rows.push([first ? String(++sl) : ' ', label, val(t.prev), Object.assign({ v: t.error ? 'n/a' : val(t.cur), a: 'c' }, mark),
+                Object.assign({ v: c ? (c > 0 ? '+' : '–') + val(Math.abs(c)) : '–', a: 'c' }, mark)]); last = t.sn;
             });
             if (rows.length) add({ no: 14, cap: name }, [T(cols, rows, { size: 17, hsize: 17 })]);
           });
@@ -540,7 +549,7 @@
       let viol = [];                                           // cells of a non-free column taking more than three lines (per rendering)
       const mkCell = (c, width, o) => c.runs
         ? cell([para(c.runs.map(function (x) { return run(x[0], x[1] || {}); }), { align: ALIGN[c.a || o.a || 'l'] })], width, { span: c.span, fill: c.fill || o.fill })
-        : cell(val(c.v), width, { align: ALIGN[c.a || o.a || 'l'], size: o.size, bold: c.bold || o.bold, span: c.span, fill: c.fill || o.fill });
+        : cell(val(c.v), width, { align: ALIGN[c.a || o.a || 'l'], size: o.size, bold: c.bold || o.bold, color: c.color, span: c.span, fill: c.fill || o.fill });
       const mkTable = (part, width, where) => {
         const size = part.size || SZ, hsize = part.hsize || size;
         if (part.t === 'kv') {

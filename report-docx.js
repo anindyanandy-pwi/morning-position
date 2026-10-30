@@ -176,6 +176,8 @@
       const head = (no, title, note, late) => ({ no, title, note, late });
       const SECS = [];
       const add = (h, parts, o = {}) => SECS.push(Object.assign({ head: h, parts, secs: o.secs || [h.no] }, o));
+      // every item of the list is in every report; a section whose source is not connected yet says so in one line
+      const PENDING = what => NOTE([['To be added: ', { bold: true, size: 18 }], [what + '.', { italics: true, size: 18 }]]);
 
       /* 1. mini control exceptions: AEN items; PWI items (deferred: no source yet) */
       {
@@ -185,6 +187,14 @@
         if (!ok('miniControl')) parts.push(ERRP(mc), pwi);
         else if (!mc.rows.length) parts.push(KV([['AEN mini control items', 'Nil']]), pwi);
         else parts.push(SUB('AEN mini control items'), T([{ h: 'Item' }, { h: 'Details of exception', free: true }], mc.rows.map(r => [r.item, r.detail])), pwi);
+        // IOW mini control items (§8): the IOW exception sheet, laid out like the AEN tab; while it is empty, one line
+        const iw = S.iowMc, iwLine = (t, it) => NOTE([['IOW mini control items: ', { size: SZ }], [t, { size: SZ, italics: !!it }]], { before: 30 });
+        if (!iw) parts.push(iwLine('not read', true));
+        else if (!iw.ok) parts.push(NOTE([['IOW mini control items — could not be read: ', { bold: true, size: 18 }], [iw.error, { italics: true, size: 18 }]], { before: 30 }));
+        else if (iw.empty) parts.push(iwLine('none entered yet in the IOW exception sheet', true));
+        else if (!iw.rows.length) parts.push(iwLine('Nil'));
+        else parts.push(SUB('IOW mini control items (data of ' + dmy(iw.dataDate) + (iw.stale ? ', older data' : '') + ')'),
+          T([{ h: 'Item' }, { h: 'Details of exception', free: true }], iw.rows.map(r => [r.item, r.detail])));
         add(head(1, 'Mini control exceptions', ok('miniControl') ? 'data of ' + dmy(mc.dataDate) : null, ok('miniControl') && mc.stale ? notYet(dmy(R.period.day)) : null), parts);
       }
       /* 2. winter patrolling (GPS) */
@@ -281,6 +291,8 @@
             ...(c.zeroRemark ? [['Remarks against zero figure', c.zeroRemark]] : [])])); }
         add(head(7, 'CCTV recording check', ok('cctv') ? 'data of ' + dmy(S.cctv.dataDate) : null, ok('cctv') && S.cctv.stale ? notYet(dmy(R.period.day)) : null), p7);
       }
+      /* 8. spot attention due — from TMS through the reader (§6), not connected yet */
+      add(head(8, 'Spot attention due'), [PENDING('open spot attention cards by priority (P1 / P2 / P3) for each unit, read from TMS')]);
       /* 9. work planned: the plan for the report day itself, from the AEN's tab of the work plan sheet */
       if (S.workPlan) {
         const wp = S.workPlan, parts = [];
@@ -299,6 +311,8 @@
         }
         add(head(9, 'Work planned for the next day', 'plan for ' + dmy(D) + (wp.ok && wp.inferredDate ? ', its date taken from the next day\'s heading' : '')), parts);
       }
+      /* 10. inspections due — planned this month in TMS, not yet done (§6), not connected yet */
+      add(head(10, 'Inspections due'), [PENDING('inspections planned for this month in TMS and not yet done, for each SSE and JE')]);
       /* 11. KPI items */
       {
         const parts = [];
@@ -350,23 +364,41 @@
         add(head(13, 'Machine utilisation', (ok('machines') && S.machines.nightDate ? 'night of ' + nightOf(S.machines.nightOf, S.machines.nightDate) + '; ' : '') + 'block from meeting sheet, effective time from TMS',
           ok('machines') && S.machines.nightStale ? notYet('night ' + wantNight) : null), parts);
       }
-      /* 14. TMS dashboard: read by the TMS reader early on the report day, the position up to the previous day */
+      /* 14. TMS dashboard: read by the TMS reader early on the report day, the position up to the previous day.
+         Not one long table: the items are grouped by subject, each group its own table, laid out by the engine like any
+         other section (two groups side by side when they fit). The heading stands above them at full width. */
       {
-        const parts = [];
-        if (!ok('tms')) parts.push(ERRP(S.tms));
+        const h14 = head(14, 'TMS dashboard', ok('tms') ? 'position on the morning of ' + dmy(S.tms.curDate) + (S.tms.prevDate ? ', against the morning of ' + dmy(S.tms.prevDate) : '') : null,
+          ok('tms') && S.tms.stale ? 'the TMS reader has not sent the reading of ' + dmy(D) : null);
+        if (!ok('tms')) add(h14, [ERRP(S.tms)]);
         else {
-          const rowsT = []; let last = null;
-          S.tms.rows.forEach(t => {
-            const first = t.sn !== last, label = first ? t.item + (t.sub ? ' – ' + t.sub : '') : '      ' + (t.sub || t.item);
-            const c = (typeof t.prev === 'number' && typeof t.cur === 'number') ? Math.round((t.cur - t.prev) * 100) / 100 : null;
-            rowsT.push([first ? String(t.sn) : ' ', label, val(t.prev), t.error ? 'n/a' : val(t.cur), c ? (c > 0 ? '+' : '–') + val(Math.abs(c)) : '–']); last = t.sn;
-          });
+          const GROUPS = [['Rails, welds and USFD', [1, 2, 16, 17, 18, 19, 34, 35, 38, 39]], ['Inspections and maintenance', [3, 4, 5, 6, 7, 8, 9, 10, 11, 36, 37, 41, 42]],
+            ['Defects pending', [12, 13, 14, 15, 40]], ['Track recording and speed restrictions', [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]], ['Asset renewal overdue', [31, 32, 33]]];
+          const known = GROUPS.reduce((a, g) => a.concat(g[1]), []), other = [...new Set(S.tms.rows.map(t => t.sn))].filter(n => known.indexOf(n) < 0);
+          if (other.length) GROUPS.push(['Other items', other]);
           const pd = S.tms.prevDate ? dm(S.tms.prevDate) : 'Prev.', cd = dm(S.tms.curDate);
-          parts.push({ t: 'twin', cols: [{ h: 'Sl.', a: 'c', one: true }, { h: 'Item', free: true }, { h: pd, a: 'c', one: true }, { h: cd, a: 'c', one: true }, { h: 'Diff.', a: 'c', one: true }], rows: rowsT, size: 16 });
+          const cols = [{ h: 'Sl.', a: 'c', one: true }, { h: 'Item', free: true }, { h: pd, a: 'c', one: true }, { h: cd, a: 'c', one: true }, { h: 'Diff.', a: 'c', one: true }];
+          add(Object.assign(h14, { leadIn: true }), [], { wide: true });          // the heading row; it keeps with the first group
+          GROUPS.forEach(([name, sns]) => {
+            const rows = []; let last = null;
+            S.tms.rows.filter(t => sns.indexOf(t.sn) >= 0).sort((x, y) => x.sn - y.sn).forEach(t => {
+              const first = t.sn !== last, label = first ? t.item + (t.sub ? ' – ' + t.sub : '') : '    ' + (t.sub || t.item);
+              const c = (typeof t.prev === 'number' && typeof t.cur === 'number') ? Math.round((t.cur - t.prev) * 100) / 100 : null;
+              rows.push([first ? String(t.sn) : ' ', label, val(t.prev), t.error ? 'n/a' : val(t.cur), c ? (c > 0 ? '+' : '–') + val(Math.abs(c)) : '–']); last = t.sn;
+            });
+            if (rows.length) add({ no: 14, cap: name }, [T(cols, rows, { size: 17, hsize: 17 })]);
+          });
         }
-        add(head(14, 'TMS dashboard', ok('tms') ? 'position on the morning of ' + dmy(S.tms.curDate) + (S.tms.prevDate ? ', against the morning of ' + dmy(S.tms.prevDate) : '') : null,
-          ok('tms') && S.tms.stale ? 'the TMS reader has not sent the reading of ' + dmy(D) : null), parts);
       }
+      /* 15. worksite entry in TMS — the TMS Work Site report of the previous day (§6), not connected yet */
+      add(head(15, 'Worksite entry in TMS'), [PENDING('worksites entered in TMS for ' + dmy(R.period.day) + ' with their five safety checks, against the work planned')]);
+      /* 16. worksite safety arrangement — PWI and IOW unit-wise (§7), not connected yet */
+      add(head(16, 'Worksite safety arrangement'), [
+        NOTE([['PWI unit-wise — to be added: ', { bold: true, size: 18 }], ['each worksite of ' + dmy(R.period.day) + ' from the Field Mini Control tab "PWI at Work Site".', { italics: true, size: 18 }]]),
+        NOTE([['IOW unit-wise — to be added: ', { bold: true, size: 18 }], ['each worksite from the IOW work-site protection sheet, placed by station.', { italics: true, size: 18 }]], { before: 30 })]);
+      /* 17. weekly position — Saturdays only; paused until its format is decided */
+      if (new Date(D + 'T00:00:00Z').getUTCDay() === 6)
+        add(head(17, 'Weekly position'), [NOTE([['Paused: ', { bold: true, size: 18 }], ['the Saturday weekly position is to be designed.', { italics: true, size: 18 }]])]);
 
       /* ======================= the layout engine =======================
          1. Width class from the content: a section is narrow when its widest natural line (a heading or a cell, unwrapped)
@@ -451,19 +483,9 @@
           j += c.span || 1; return cc; }) }); };
         return table(w, [...(part.nohead ? [] : [H(part.cols.map(c => c.h), w, hsize)]), ...part.rows.map(r => row(r, { size })), ...(part.foot || []).map(r => row(r, { size }))], part.keep ? { keep: part.keep } : {});
       };
-      const mkTwin = (part, width) => {                       // TMS dashboard: the list in two halves side by side, one table
-        const gw = 240, hw = Math.floor((width - gw) / 2), { w: tw } = fitCols(part.cols, part.rows, hw, part.size);
-        const cols = [...tw, width - 2 * hw, ...tw], rowsT = part.rows;
-        const split = Math.ceil(rowsT.length / 2) + 1, Lr = rowsT.slice(0, split), Rr = rowsT.slice(split);
-        const gap = () => cell('', width - 2 * hw, { borders: { top: nb, bottom: nb, left: b, right: b } });
-        const half5 = (r, hd) => r ? r.map((v, i) => cell(hd ? v : val(v), tw[i], hd ? { fill: GREY, bold: true, align: C, size: part.size } : { align: ALIGN[part.cols[i].a || 'l'], size: part.size }))
-          : tw.map(x => cell('', x, { borders: NONE }));
-        const hd = part.cols.map(c => c.h);
-        return table(cols, [TR({ tableHeader: true, cantSplit: true, children: [...half5(hd, true), gap(), ...half5(hd, true)] }),
-          ...Lr.map((r, i) => TR({ cantSplit: true, children: [...half5(r), gap(), ...half5(Rr[i])] }))]);
-      };
       const headPara = h => h.line
         ? para([run(h.no + '.  ', { bold: true, size: 21 }), run(h.line, { size: 19 })], { before: DZ.sec, after: 50, sec: [6, 7] })
+        : h.cap ? para([run(h.cap, { bold: true, size: 18 })], { before: Math.round(DZ.sec * 0.6), after: 30, keepNext: true, sec: [h.no] })
         : section(h.no, h.title, h.note, h.late);
       // a section laid out at a width: its heading and parts; an empty line between two tables keeps Word from joining them
       // `whole`: a short section is kept on one page — every paragraph and every table row but the last keeps with
@@ -480,15 +502,14 @@
           if (p.t === 'note') { els.push(para(p.runs.map(([t, o]) => run(t, o || {})), { before: p.before || 0, after: 20, keepNext: kn || glue })); lastTable = false; return; }
           if (p.t === 'sub') { els.push(para([run(p.text, { bold: true, size: 18 })], { before: 30, after: 30, keepNext: true })); lastTable = false; return; }
           if (lastTable) els.push(para('', { exact: 60, keepNext: !!whole }));
-          els.push(p.t === 'twin' ? mkTwin(p, width) : mkTable(Object.assign({}, p, whole ? { keep: glue ? 'next' : 'all' } : (glue ? { keep: 'next' } : {})), width, 'section ' + sp.head.no)); lastTable = true;
+          els.push(mkTable(Object.assign({}, p, whole ? { keep: glue ? 'next' : 'all' } : (glue ? { keep: 'next' } : {})), width, 'section ' + sp.head.no)); lastTable = true;
         });
         if (whole) { const id = ++atomN; els.forEach(e => { e._atomId = id; }); }
         return els;
       };
       const heightOf = (els, width) => sum(els.map(e => e._h !== undefined ? e._h : paraH(e, width)));
       // rule 1: narrow or wide, from the content
-      const narrowOK = sp => sp.parts.every(p => {
-        if (p.t === 'twin') return false;
+      const narrowOK = sp => !sp.wide && sp.parts.every(p => {
         if (p.t === 'note' || p.t === 'sub') return true;
         const size = p.size || SZ, hs = p.hsize || size;
         if (p.t === 'kv') { const f = fitCols([{ h: '' }, { h: '' }], p.rows, COL, SZ); return Math.max(...f.nat) <= COL && sum(f.mn) <= COL; }
@@ -500,7 +521,7 @@
         sp.narrow = narrowOK(sp);
         sp.full = render(sp, W); sp.hFull = heightOf(sp.full, W);
         // a section under a quarter of a page never splits across pages: its heading, captions and tables move together
-        if (sp.hFull < PH / 4) { sp.full = render(sp, W, true); sp.hFull = heightOf(sp.full, W); }
+        if (sp.hFull < PH / 4 && !sp.head.leadIn) { sp.full = render(sp, W, true); sp.hFull = heightOf(sp.full, W); }
         if (sp.narrow) { sp.half = render(sp, COL); sp.hHalf = heightOf(sp.half, COL); }
       });
       // rule 2: the pairing that gives the shortest report (heights within 1.6x); `no` lists pairs that must not be made
@@ -534,7 +555,16 @@
       // the layouts tried: the best pairing, and each of its pairs undone (rule 3 then lays both at full width)
       const ARR = [{ name: 'best pairing', cost: 0, rows: packed },
         ...packed.filter(r => r.kind === 'pair').map(r => ({ name: 'sections ' + r.s.map(x => x.head.no).join(' and ') + ' not paired', cost: 1.5, rows: pack([r.at]) }))]
-        .map(a => Object.assign(a, { g: a.rows.map((rw, i) => i ? rowEls(rw) : [...head0, ...rowEls(rw)]) }));
+        .map(a => {
+          // a heading that stands alone above its groups (14) is joined to the row after it, so it never ends a page
+          const g = []; let hold = [];
+          a.rows.forEach((rw, i) => {
+            const els = [...(i ? [] : head0), ...hold, ...rowEls(rw)]; hold = [];
+            if (rw.kind === 'full' && rw.s[0].head.leadIn && i < a.rows.length - 1) hold = els; else g.push(els);
+          });
+          if (hold.length) g.push(hold);
+          return Object.assign(a, { g });
+        });
 
       /* ---------- page filling: where the main report ends ---------- */
       // Walk the main report as Word would: rows that cannot split move to the next page (with the table's header row repeated).
@@ -689,12 +719,12 @@
         [20, 16, [img(art.contents, 634, 16)]]];
       // the contents: the sections in this report, with the page each starts on (the top sheet is page 1)
       const has = n => n in secs, pg = n => String(secs[n] + 1);
-      const ITEMS = [[1, 'Mini control exceptions', [['AEN mini control items'], ['PWI mini control items', 'deferred'], ...(has('1c') ? [['IOW mini control items']] : [])]],
+      const ITEMS = [[1, 'Mini control exceptions', [['AEN mini control items'], ['PWI mini control items', 'deferred'], ['IOW mini control items']]],
         [2, 'Winter patrolling'], [3, S.pir && S.pir.ok && S.pir.rows.length ? 'Failures and PIRs' : 'Failures'], [4, 'Cautions and TDC overdue'], [5, 'Bad road surface at LC gates'],
         [6, 'NI LC inspection'], [7, 'CCTV recording check'], [8, 'Spot attention due'],
         [9, 'Work planned for the next day', [['Track-circuited area'], ['Non track-circuited area']]], [10, 'Inspections due'], [11, 'KPI items'],
         [12, 'Blocks availed and output'], [13, 'Machine utilisation'], [14, 'TMS dashboard'], [15, 'Worksite entry in TMS'],
-        [16, 'Worksite safety arrangement', [['PWI unit-wise'], ...(S.iowSafety ? [['IOW unit-wise']] : [])]], [17, 'Weekly position']];
+        [16, 'Worksite safety arrangement', [['PWI unit-wise'], ['IOW unit-wise']]], [17, 'Weekly position']];
       const saturday = day.getUTCDay() === 6;
       const shown = ITEMS.filter(([n]) => has(n) || (n === 17 && saturday));
       const colW = Math.floor((CW - px(40)) / 2), numT = px(30);

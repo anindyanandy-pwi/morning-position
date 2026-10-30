@@ -234,6 +234,9 @@
           };
           parts.push(T([{ h: '', free: true }], pirs.map(band), { nohead: true, size: 18, keep: 'all' }));
         }
+        // a PIR tab that could not be read (renamed, its heading row changed) is named in one small line; the others still count
+        if (ok('pir') && S.pir.problems && S.pir.problems.length)
+          parts.push(NOTE([['PIR tab' + (S.pir.problems.length > 1 ? 's' : '') + ' not read: ', { bold: true, size: 16 }], [S.pir.problems.join('; '), { italics: true, size: 16 }]], { before: 20 }));
         add(head(3, pirs.length ? 'Failures and PIRs' : 'Failures', fd.length ? 'reported on ' + [...new Set(fd.map(x => dmy(x.dataDate)))].join(' / ') : null, fd.some(x => x.stale) ? notYet(dmy(R.period.day)) : null), parts);
       }
       /* 4. cautions */
@@ -291,8 +294,19 @@
             ...(c.zeroRemark ? [['Remarks against zero figure', c.zeroRemark]] : [])])); }
         add(head(7, 'CCTV recording check', ok('cctv') ? 'data of ' + dmy(S.cctv.dataDate) : null, ok('cctv') && S.cctv.stale ? notYet(dmy(R.period.day)) : null), p7);
       }
-      /* 8. spot attention due — from TMS through the reader (§6), not connected yet */
-      add(head(8, 'Spot attention due'), [PENDING('open spot attention cards by priority (P1 / P2 / P3) for each unit, read from TMS')]);
+      const unitOf = u => String(u || '').replace(/^\s*(A?DEN|SSE|JE)\s*\/\s*(P\.?\s*W(AY)?\s*\/\s*)?/i, '').replace(/\s*\(/, ' (');
+      /* 8. spot attention due — open spot attention cards by priority per SSE/P.Way unit, TMS summary as on the day (§6) */
+      {
+        const sa = S.spot, parts = [];
+        if (!sa || !sa.ok) parts.push(ERRP(sa || { error: 'not read' }));
+        else if (!sa.total || !sa.total.total) parts.push(KV([['Open spot attention cards', 'Nil']]));
+        else {
+          const r4 = x => [String(x.p1), String(x.p2), String(x.p3), String(x.total)];
+          parts.push(T([{ h: 'Unit' }, { h: 'P1', a: 'c', one: true }, { h: 'P2', a: 'c', one: true }, { h: 'P3', a: 'c', one: true }, { h: 'Total', a: 'c', one: true }],
+            sa.units.map(u => [unitOf(u.unit), ...r4(u)]).concat([[{ v: 'AEN/' + R.aen, bold: true }, ...r4(sa.total).map(v => ({ v, bold: true }))]]), { size: 18, hsize: 18 }));
+        }
+        add(head(8, 'Spot attention due', sa && sa.ok ? 'open cards as on ' + dmy(sa.dataDate) : null, sa && sa.ok && sa.stale ? 'TMS reading of ' + dmy(D) + ' not yet sent' : null), parts);
+      }
       /* 9. work planned: the plan for the report day itself, from the AEN's tab of the work plan sheet */
       if (S.workPlan) {
         const wp = S.workPlan, parts = [];
@@ -311,8 +325,25 @@
         }
         add(head(9, 'Work planned for the next day', 'plan for ' + dmy(D) + (wp.ok && wp.inferredDate ? ', its date taken from the next day\'s heading' : '')), parts);
       }
-      /* 10. inspections due — planned this month in TMS, not yet done (§6), not connected yet */
-      add(head(10, 'Inspections due'), [PENDING('inspections planned for this month in TMS and not yet done, for each SSE and JE')]);
+      /* 10. inspections due — TMS plans inspections by month: what is planned for this month and not yet done, per SSE and
+         JE (and the AEN's own), with any planned in earlier months and still not done (§6, option a) */
+      {
+        const ip = S.inspPlan, parts = [];
+        const MON = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+        const mName = ip && ip.ok && ip.month ? MON[Number(ip.month.slice(5, 7)) - 1] + ' ' + ip.month.slice(0, 4) : '';
+        const list = a => !a.length ? '–' : a.length <= 8 ? a.join(', ') : a.length + ': ' + a.slice(0, 4).join(', ') + ' …';
+        if (!ip || !ip.ok) parts.push(ERRP(ip || { error: 'not read' }));
+        else if (!ip.designations.length) parts.push(KV([['Inspections planned for ' + mName, 'none in TMS for this AEN']]));
+        else {
+          const rows = [];
+          ip.designations.forEach(g => g.features.forEach((f, i) => rows.push([i ? ' ' : unitOf(g.name), f.feature, f.planned + ' / ' + f.done, list(f.notDone), list(f.overdue)])));
+          const open = ip.designations.reduce((a, g) => a + g.features.reduce((b, f) => b + f.notDone.length + f.overdue.length, 0), 0);
+          parts.push(T([{ h: 'SSE / JE' }, { h: 'Feature' }, { h: 'Planned / done', a: 'c', one: true }, { h: 'Not yet done this month', free: true }, { h: 'Overdue from earlier months', free: true }], rows, { size: 17, hsize: 17 }));
+          if (!open) parts.push(NOTE([['All inspections planned for ' + mName + ' so far done.', { italics: true, size: 17 }]], { before: 20 }));
+        }
+        add(head(10, 'Inspections due', ip && ip.ok ? 'planned for ' + mName + ' in TMS, as on ' + dmy(ip.dataDate) : null, ip && ip.ok && ip.stale ? 'TMS reading of ' + dmy(D) + ' not yet sent' : null), parts,
+          { wide: !!(ip && ip.ok && ip.designations.length) });     // asset lists need the full width
+      }
       /* 11. KPI items */
       {
         const parts = [];
@@ -390,12 +421,53 @@
           });
         }
       }
-      /* 15. worksite entry in TMS — the TMS Work Site report of the previous day (§6), not connected yet */
-      add(head(15, 'Worksite entry in TMS'), [PENDING('worksites entered in TMS for ' + dmy(R.period.day) + ' with their five safety checks, against the work planned')]);
-      /* 16. worksite safety arrangement — PWI and IOW unit-wise (§7), not connected yet */
-      add(head(16, 'Worksite safety arrangement'), [
-        NOTE([['PWI unit-wise — to be added: ', { bold: true, size: 18 }], ['each worksite of ' + dmy(R.period.day) + ' from the Field Mini Control tab "PWI at Work Site".', { italics: true, size: 18 }]]),
-        NOTE([['IOW unit-wise — to be added: ', { bold: true, size: 18 }], ['each worksite from the IOW work-site protection sheet, placed by station.', { italics: true, size: 18 }]], { before: 30 })]);
+      /* 15. worksite entry in TMS — the TMS Work Site report of the day of D-1: each worksite with its five yes/no checks (§6) */
+      {
+        const ws = S.tmsWorksites, parts = [];
+        if (!ws || !ws.ok) parts.push(ERRP(ws || { error: 'not read' }));
+        else if (!ws.rows.length) parts.push(KV([['Worksites entered in TMS for ' + dmy(ws.dataDate), 'None']]));
+        else {
+          const yn = v => ({ v: v || '–', bold: /^no$/i.test(v || '') });
+          parts.push(T([{ h: 'Unit' }, { h: 'Block section · line · km', free: true }, { h: 'Work', free: true }, { h: 'Block adequate', a: 'c' }, { h: 'Labour adequate', a: 'c' },
+            { h: 'Competency cert.', a: 'c' }, { h: 'Protection as per IRPWM', a: 'c' }, { h: 'Safety instr. followed', a: 'c' }],
+            ws.rows.map(r => [unitOf(r.sse), [r.block, r.line, r.from ? 'km ' + r.from + (r.to && r.to !== r.from ? '–' + r.to : '') : ''].filter(Boolean).join(' · '), r.type + (r.execution ? ' (' + r.execution.toLowerCase() + ')' : ''),
+              yn(r.blockOk), yn(r.labourOk), yn(r.competency), yn(r.protection), yn(r.safety)]), { size: 17, hsize: 16 }));
+        }
+        add(head(15, 'Worksite entry in TMS', ws && ws.ok ? 'worksites of ' + dmy(ws.dataDate) : null), parts);
+      }
+      /* 16. worksite safety arrangement — PWI unit-wise (Field Mini Control "PWI at Work Site") and IOW unit-wise (the IOW
+         work-site protection log, placed by station), each worksite of the report day on one row (§7) */
+      {
+        const pw = S.pwiSites, iw = S.iowSites, parts = [], dates = [], late = [];
+        const unitName = u => String(u).replace(/^\s*(SSE|JE)\s*\/\s*P\.?\s*W(ay)?\s*\/\s*/i, '');
+        const errLine = (what, x) => NOTE([[what + ' — could not be read: ', { bold: true, size: 18 }], [x ? x.error : 'not read', { italics: true, size: 18 }]], { before: parts.length ? 30 : 0 });
+        if (!pw || !pw.ok) parts.push(errLine('PWI unit-wise', pw));
+        else {
+          dates.push(pw.dataDate); if (pw.stale) late.push('PWI entry for ' + dmy(R.period.day));
+          const rows = [];
+          pw.units.forEach(u => {
+            if (!u.sites.length) { rows.push([unitName(u.unit), 'No worksite', '', '', '', '', '']); return; }
+            u.sites.forEach((x, i) => rows.push([i ? ' ' : unitName(u.unit), [x.block, x.line].filter(Boolean).join(' · ') + (x.work ? ': ' + x.work : ''),
+              x.caution || '–', x.certs + '/3', (x.pre || '–') + ' / ' + (x.post || '–'), x.checked || '–', x.remark || '–']));
+          });
+          const n = pw.units.reduce((a, u) => a + u.sites.length, 0);
+          if (!pw.units.length) parts.push(KV([['PWI unit-wise', 'no rows for AEN/' + R.aen + ' in the tab']]));
+          else parts.push(SUB('PWI unit-wise (' + (n ? n + ' worksite' + (n > 1 ? 's' : '') : 'no worksite') + ', ' + dmy(pw.dataDate) + ')'),
+            T([{ h: 'Unit' }, { h: 'Block section · line: work', free: true }, { h: 'Caution', free: true }, { h: 'Certificates', a: 'c', one: true },
+              { h: 'Photos pre / post', a: 'c', one: true }, { h: 'Measurement checked', a: 'c' }, { h: 'AEN remark', free: true }], rows, { size: 17, hsize: 17 }));
+        }
+        if (!iw || !iw.ok) parts.push(errLine('IOW unit-wise', iw));
+        else {
+          dates.push(iw.dataDate); if (iw.stale) late.push('IOW entry for ' + dmy(R.period.day));
+          const chk = r => r.yes + ' of ' + r.checks + ' Yes' + (r.na ? ', ' + r.na + ' NA' : '') + (r.blank ? ', ' + r.blank + ' blank' : '') + (r.no ? '; No: ' + r.noItems.join(', ') : '');
+          if (!iw.rows.length) parts.push(KV([['IOW unit-wise (' + dmy(iw.dataDate) + ')', 'No worksite']]));
+          else parts.push(SUB('IOW unit-wise (' + iw.rows.length + ' worksite' + (iw.rows.length > 1 ? 's' : '') + ', ' + dmy(iw.dataDate) + ')'),
+            T([{ h: 'Unit · station' }, { h: 'Work', free: true }, { h: 'Supervisor' }, { h: 'Checklist', free: true }, { h: 'Mini control', a: 'c' }],
+              iw.rows.map(r => [[r.unit, r.station].filter(Boolean).join(' · '), r.work + (r.location ? ' (' + r.location + ')' : ''), r.supervisor || '–', chk(r), r.verify || '–']), { size: 17, hsize: 17 }));
+        }
+        const ds = [...new Set(dates)];
+        add(head(16, 'Worksite safety arrangement', ds.length ? 'work of ' + ds.map(dmy).join(' / ') : null, late.length ? notYet(late.join(', ')) : null), parts);
+      }
       /* 17. weekly position — Saturdays only; paused until its format is decided */
       if (new Date(D + 'T00:00:00Z').getUTCDay() === 6)
         add(head(17, 'Weekly position'), [NOTE([['Paused: ', { bold: true, size: 18 }], ['the Saturday weekly position is to be designed.', { italics: true, size: 18 }]])]);

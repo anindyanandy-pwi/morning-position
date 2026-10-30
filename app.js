@@ -194,6 +194,9 @@
     if (!s) { line('TMS data', '…'); return; }
     line('TMS items', when(s.items));
     line('TMS machines', when(s.machines));
+    line('TMS spot attention', when(s.spotAttention));
+    line('TMS worksites', when(s.worksites));
+    line('TMS inspection plan', when(s.inspPlan));
     line('TMS Control', s.tmsControl && s.tmsControl.at ? when({ at: String(s.tmsControl.at).replace('T', ' ').slice(0, 16) }) : 'not found');
   }
   // Every click makes a fresh report from the latest data, for all ten offices.

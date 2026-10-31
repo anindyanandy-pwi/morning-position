@@ -436,7 +436,10 @@
               rows.push([first ? String(++sl) : ' ', label, val(t.prev), Object.assign({ v: t.error ? 'n/a' : val(t.cur), a: 'c' }, mark),
                 Object.assign({ v: c ? (c > 0 ? '+' : '–') + val(Math.abs(c)) : '–', a: 'c' }, mark)]); last = t.sn;
             });
-            if (rows.length) add({ no: 14, cap: name }, [T(cols, rows, { size: 17, hsize: 17 })]);
+            // user, 31.10.2026: an item counted from a TMS list names all its places under the table (the AEN's own, the full list)
+            const where = S.tms.rows.filter(t => sns.indexOf(t.sn) >= 0 && t.cur && t.places && t.places.length).sort((x, y) => x.sn - y.sn)
+              .map(t => NOTE([[(t.sub || t.item) + ': ', { bold: true, size: 16 }], [t.places.join('; '), { size: 16 }]], { before: 20 }));
+            if (rows.length) add({ no: 14, cap: name }, [T(cols, rows, { size: 17, hsize: 17 }), ...where]);
           });
         }
       }

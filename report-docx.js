@@ -415,12 +415,12 @@
           ok('tms') && S.tms.stale ? 'the TMS reader has not sent the reading of ' + dmy(D) : null);
         if (!ok('tms')) add(h14, [ERRP(S.tms)]);
         else {
-          // user, 30.10.2026: spot attention (40) is section 8, not here; TSR and OMS (24-28) are left out; the Sl. column
+          // user, 30.10.2026 / 02.11.2026: spot attention (40) is section 8 and no longer a TMS item at all; TSR and OMS (24-28) are left out; the Sl. column
           // numbers the rows of the section 1, 2, 3 … in order (the TMS item numbers jumped about between the groups);
           // a figure that got worse since the previous morning is red and bold, one that got better green and bold
           const GROUPS = [['Rails, welds and USFD', [1, 2, 16, 17, 18, 19, 34, 35, 38, 39]], ['Inspections and maintenance', [3, 4, 5, 6, 7, 8, 9, 10, 11, 36, 37, 41, 42]],
             ['Defects pending', [12, 13, 14, 15]], ['Track recording', [20, 21, 22, 23, 29, 30]], ['Asset renewal overdue', [31, 32, 33]]];
-          const LEFT_OUT = [24, 25, 26, 27, 28, 40], MORE_IS_BETTER = [34, 35, 36, 37, 38, 39];
+          const LEFT_OUT = [24, 25, 26, 27, 28], MORE_IS_BETTER = [34, 35, 36, 37, 38, 39];
           const known = GROUPS.reduce((a, g) => a.concat(g[1]), LEFT_OUT), other = [...new Set(S.tms.rows.map(t => t.sn))].filter(n => known.indexOf(n) < 0);
           let sl = 0;
           if (other.length) GROUPS.push(['Other items', other]);

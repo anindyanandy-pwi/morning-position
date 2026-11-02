@@ -161,6 +161,20 @@
       </div>
     </div>
 
+    <!-- admin: placements (spec §12) -->
+    <div id="vPlace" hidden>
+      <div class="page-head"><div><h1 class="h2" style="font-size:30px">Placements</h1><p>Rows the reports could not put under an AEN. Answer each once; the answer is used in every report from then on.</p></div></div>
+      <div class="block">
+        <div class="label">Waiting for an answer</div>
+        <p class="small"><b>Belongs to</b> puts the row under that AEN · <b>Ignore</b> leaves it out of every report · <b>Date swap</b> reads its date as day and month swapped back (Sheets had swapped them).</p>
+        <div class="table-box"><table class="t" style="min-width:760px"><thead><tr><th>Found in</th><th>Row</th><th style="width:150px">Seen</th><th style="width:330px">Answer</th></tr></thead><tbody id="pOpen"></tbody></table></div>
+      </div>
+      <div class="block">
+        <div class="label">Answers given</div>
+        <div class="table-box"><table class="t" style="min-width:760px"><thead><tr><th>Found in</th><th>Row</th><th style="width:150px">Answer</th><th style="width:190px">By</th><th style="width:90px"></th></tr></thead><tbody id="pDone"></tbody></table></div>
+      </div>
+    </div>
+
     <!-- admin: data and checks -->
     <div id="vData" hidden>
       <div class="page-head"><div><h1 class="h2" style="font-size:30px">Data and checks</h1><p>What came in, and rows that need a look.</p></div></div>
@@ -174,7 +188,7 @@
       </div>
       <div class="block issues">
         <div class="label">Rows that need attention</div>
-        <p class="small">Entries that could not be placed under an AEN, and times that Google Sheets had turned into dates.</p>
+        <p class="small">Entries not yet placed under an AEN (answer them on the Placements page), times and dates that Google Sheets had changed.</p>
         <div id="dIssues"></div>
       </div>
     </div>

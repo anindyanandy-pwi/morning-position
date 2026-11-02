@@ -75,10 +75,10 @@
 
   /* ---------- after sign-in ---------- */
   const ROLE = { admin: 'Administrator', operator: 'Engg/CNL', aen: '' };
-  const VIEWS = ['vToday', 'vAen', 'vReports', 'vUsers', 'vSettings', 'vData'];
-  const MENU = { admin: [['vToday', 'Today'], ['vReports', 'Reports'], ['vUsers', 'Users'], ['vSettings', 'Settings'], ['vData', 'Data and checks']],
+  const VIEWS = ['vToday', 'vAen', 'vReports', 'vUsers', 'vSettings', 'vPlace', 'vData'];
+  const MENU = { admin: [['vToday', 'Today'], ['vReports', 'Reports'], ['vUsers', 'Users'], ['vSettings', 'Settings'], ['vPlace', 'Placements'], ['vData', 'Data and checks']],
                  operator: [['vToday', 'Today'], ['vReports', 'Reports']] };
-  const LOAD = { vToday: () => loadToday(), vAen: () => loadAen(), vReports: () => loadReports(), vUsers: () => loadAdmin(), vSettings: () => loadAdmin(), vData: () => loadAdmin() };
+  const LOAD = { vToday: () => loadToday(), vAen: () => loadAen(), vReports: () => loadReports(), vUsers: () => loadAdmin(), vSettings: () => loadAdmin(), vPlace: () => loadPlacements(), vData: () => loadAdmin() };
 
   async function start() {
     try { me = await call('me'); } catch (e) { if (session) signedOut(e.message); return; }
@@ -284,7 +284,11 @@
       if (!(s.uploads || []).length) { const tr = el('tr'); const td = el('td', '', 'Nothing received yet.'); td.colSpan = 4; tr.appendChild(td); ub.appendChild(tr); }
       const iss = $('dIssues'); iss.innerHTML = '';
       Object.keys(s.issues || {}).sort().reverse().slice(0, 7).forEach(d => Object.keys(s.issues[d]).forEach(a => {
-        const it = s.issues[d][a], lines = [...(it.unassigned || []).map(x => 'Not placed: ' + x), ...(it.timeFixes || []).map(x => 'Time read from a date: ' + x)];
+        // rows already answered on the Placements page are not shown again (spec §12)
+        const placed = new Set(s.placed || []), open = (it => (it.unassigned || []).filter(x => { const i = x.indexOf(': ');
+          return !placed.has(placeKey(i < 0 ? x : x.slice(0, i), i < 0 ? '' : x.slice(i + 2))); }));
+        const it = s.issues[d][a], lines = [...open(it).map(x => 'Not placed: ' + x), ...(it.timeFixes || []).map(x => 'Time read from a date: ' + x),
+          ...(it.dateSwaps || []).map(x => 'Date read as dd.mm after a Sheets swap: ' + x)];
         if (!lines.length) return;
         iss.appendChild(el('b', '', dmy(d) + ' · AEN/' + a));
         const ul = el('ul'); lines.forEach(l => ul.appendChild(el('li', '', l))); iss.appendChild(ul);
@@ -292,6 +296,42 @@
       if (!iss.children.length) iss.appendChild(el('p', 'empty', 'Nothing to look at.'));
     } catch (e) { tell(e.message, 'err'); console.error(e); }
   }
+  /** The server's placementKey(): where without dates + the row's text, upper case, spaces collapsed. */
+  const placeKey = (where, text) => String(where || '').toUpperCase().replace(/\b\d{1,2}[.\/-]\d{1,2}[.\/-]\d{2,4}\b/g, '').replace(/\s+/g, ' ').trim()
+    + '|' + String(text || '').toUpperCase().replace(/\s+/g, ' ').trim();
+
+  /* ---------- admin: Placements (spec §12) ---------- */
+  async function loadPlacements() {
+    try { drawPlacements(await call('placements')); } catch (e) { tell(e.message, 'err'); console.error(e); }
+  }
+  async function answer(where, text, ans) {
+    try { drawPlacements(await call('savePlacement', { where, text, answer: ans })); tell(ans == null ? 'Answer removed.' : 'Saved. It is used in every report from now on.', 'ok'); }
+    catch (e) { tell(e.message, 'err'); }
+  }
+  function drawPlacements(v) {
+    const ob = $('pOpen'), db = $('pDone'); ob.innerHTML = ''; db.innerHTML = '';
+    const none = (tb, n, t) => { const tr = el('tr'), td = el('td', 'empty', t); td.colSpan = n; tr.appendChild(td); tb.appendChild(tr); };
+    (v.open || []).forEach(o => {
+      const tr = el('tr');
+      tr.appendChild(el('td', '', o.where)); tr.appendChild(el('td', '', o.text || '—'));
+      tr.appendChild(el('td', 'small', o.days.slice(-3).map(dmy).join(', ') + (o.days.length > 3 ? ' …' : '')));
+      const td = el('td'), row = el('div', 'row'), sel = el('select', 'field');
+      sel.appendChild(el('option', '', 'Belongs to …')); sel.options[0].value = '';
+      (v.aens || []).forEach(a => { const op = el('option', '', 'AEN/' + a); op.value = a; sel.appendChild(op); });
+      sel.onchange = () => { if (sel.value) answer(o.where, o.text, sel.value); };
+      const ig = el('button', 'btn-line', 'Ignore'), sw = el('button', 'btn-line', 'Date swap');
+      ig.onclick = () => answer(o.where, o.text, 'ignore'); sw.onclick = () => answer(o.where, o.text, 'swap');
+      [sel, ig, sw].forEach(x => row.appendChild(x)); td.appendChild(row); tr.appendChild(td); ob.appendChild(tr);
+    });
+    if (!(v.open || []).length) none(ob, 4, 'Nothing waiting. Every row is placed.');
+    (v.answered || []).forEach(o => {
+      const tr = el('tr');
+      [o.where, o.text || '—', o.aen ? 'AEN/' + o.aen : o.ignore ? 'Ignore' : 'Date swap', (o.by || '') + (o.at ? ' · ' + o.at : '')].forEach(x => tr.appendChild(el('td', '', x)));
+      const td = el('td'), b = el('button', 'btn-line', 'Undo'); b.onclick = () => answer(o.where, o.text, null); td.appendChild(b); tr.appendChild(td); db.appendChild(tr);
+    });
+    if (!(v.answered || []).length) none(db, 5, 'No answers yet.');
+  }
+
   function drawUsers() {
     const tb = $('usersBody'); tb.innerHTML = '';
     admins.forEach((a, i) => {

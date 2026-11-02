@@ -356,7 +356,8 @@
           const frac = (n, f) => f ? n + ' ' + f.done + '/' + f.total : null;
           const chartDone = u => !u.chart ? 'Not received' : !u.chart.reaches ? 'Chart not yet received for this month'
             : [frac('P&C', u.chart.pc), frac('LC', u.chart.lc), frac('LWR', u.chart.lwr), frac('Curves', u.chart.curves)].filter(Boolean).join(', ') || '–';
-          const gaps = (km, a) => val(km) + (a && a.length ? ' (' + a.slice(0, 3).join('; ') + (a.length > 3 ? ' …' : '') + ')' : '');
+          const clip = (t, n) => t.length > n ? t.slice(0, t.lastIndexOf(' ', n) > n * 0.6 ? t.lastIndexOf(' ', n) : n).replace(/[,;\s]+$/, '') + ' …' : t;
+          const gaps = (km, a) => val(km) + (a && a.length ? ' (' + clip(a.join('; '), 150) + ')' : '');
           const items = [['KPI marks, last month (out of 82)', u => val(u.lastMonth)], ['KPI marks, this month – forecast (out of 82)', u => val(u.thisMonth)],
             ['KPIs short of full marks', u => u.shortfalls.length ? u.shortfalls.join(', ') : 'Nil'],
             ['Inspections due this month (TMS plan)', u => list(u.due, 6)], ['Inspections planned earlier, not done', u => list(u.lateFromPlan, 6)],
@@ -364,10 +365,10 @@
             ['Inspected this month (TMS inspection chart)', chartDone],
             ['Foot plate inspection – km not covered this fortnight', u => gaps(u.footPlate, u.chart && u.chart.reaches ? u.chart.noFootPlate : [])],
             ['Trolley inspection – km not covered (2 months)', u => u.trolleyLines && u.trolleyLines.length
-              ? val(u.trolley) + ' (still to walk, line by line: ' + u.trolleyLines.slice(0, 3).join('; ') + (u.trolleyLines.length > 3 ? ' …' : '') + ')'
+              ? val(u.trolley) + ' (still to walk, line by line: ' + clip(u.trolleyLines.join('; '), 150) + ')'
               : gaps(u.trolley, u.chart && u.chart.reaches ? u.chart.noTrolley : [])],
             ['Defects crossing 10 days', u => u.defects ? u.defects + ': ' + u.defectPlaces.slice(0, 4).join(', ') : 'Nil']];
-          parts.push(T([{ h: 'Sl.', a: 'c', one: true }, { h: 'Item' }, ...U.map(u => ({ h: 'SSE/P.Way/' + u.label, a: 'c' }))], items.map(([t, f], i) => [String(i + 1), t, ...U.map(f)])));
+          parts.push(T([{ h: 'Sl.', a: 'c', one: true }, { h: 'Item' }, ...U.map(u => ({ h: 'SSE/P.Way/' + u.label, a: 'c', free: true }))], items.map(([t, f], i) => [String(i + 1), t, ...U.map(f)])));
           if (S.kpi.warning) parts.push(NOTE([[S.kpi.warning, { italics: true, size: 18 }]]));
         }
         add(head(11, 'KPI items', ok('kpi') && S.kpi.generatedAt ? 'TMS Control, ' + dmy(S.kpi.generatedAt.slice(0, 10)) + ' ' + S.kpi.generatedAt.slice(11, 16) : 'from TMS Control'), parts);

@@ -382,8 +382,8 @@
           const lbl = [];
           U.forEach(u => { const it = u.trolleyItems || [], secs = [];
             it.forEach(r => { if (secs.indexOf(r.section) < 0) secs.push(r.section); });
-            secs.forEach(sc => it.filter(r => r.section === sc).forEach((r, j) => lbl.push([...(U.length > 1 ? [j || sc !== secs[0] ? '' : u.label] : []),
-              j ? '' : (sc || '–'), r.line || '–', [r.kmFrom, r.kmTo].filter(v => v !== null && v !== undefined && v !== '').join(' – ') || '–',
+            secs.forEach(sc => it.filter(r => r.section === sc).forEach((r, j) => lbl.push([...(U.length > 1 ? [j || sc !== secs[0] ? ' ' : u.label] : []),
+              j ? ' ' : (sc || '–'), r.line || '–', [r.kmFrom, r.kmTo].filter(v => v !== null && v !== undefined && v !== '').join(' – ') || '–',
               val(r.kmToInspect), val(r.speed), r.need || '–']))); });
           if (lbl.length) {
             parts.push(SUB('Trolley / on-foot inspection – line by line'));

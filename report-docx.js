@@ -5,6 +5,15 @@
  * bold centred grey headers, numbers centred. The report ends where its last section ends.
  */
 (function (g) {
+  // section 11, trolley row. onFoot is the part of trolley above 110 km/h where on foot also counts: it is never
+  // added to trolley (user, 02.11.2026). Null onFoot (before TMS Control's first recalculation): the line as before.
+  function kpiTrolleyText(u, val, clip, gaps) {
+    const below = (u.trolleyItems || []).length ? ' – line by line below' : '';
+    if (typeof u.onFoot === 'number') return val(u.trolley) + ' km not covered, of which ' + val(u.onFoot) + ' km above 110 km/h (on foot also counts)' + below;
+    if (below) return val(u.trolley) + below;
+    return u.trolleyLines && u.trolleyLines.length ? val(u.trolley) + ' (still to walk, line by line: ' + clip(u.trolleyLines.join('; '), 150) + ')'
+      : gaps(u.trolley, u.chart && u.chart.reaches ? u.chart.noTrolley : []);
+  }
   function buildMorningDoc(X, R, opts) {
     opts = opts || {};
     const { Document, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, ShadingType,
@@ -364,14 +373,26 @@
             ['Inspections overdue', u => u.overdueCount ? u.overdueCount + ': ' + u.overdue.slice(0, 6).join(', ') + (u.overdue.length > 6 ? ' …' : '') : 'Nil'],
             ['Inspected this month (TMS inspection chart)', chartDone],
             ['Foot plate inspection – km not covered this fortnight', u => gaps(u.footPlate, u.chart && u.chart.reaches ? u.chart.noFootPlate : [])],
-            ['Trolley inspection – km not covered (2 months)', u => u.trolleyLines && u.trolleyLines.length
-              ? val(u.trolley) + ' (still to walk, line by line: ' + clip(u.trolleyLines.join('; '), 150) + ')'
-              : gaps(u.trolley, u.chart && u.chart.reaches ? u.chart.noTrolley : [])],
+            [U.some(u => typeof u.onFoot === 'number') ? 'Trolley / on-foot inspection – km not covered (2 months)' : 'Trolley inspection – km not covered (2 months)',
+              u => kpiTrolleyText(u, val, clip, gaps)],
             ['Defects crossing 10 days', u => u.defects ? u.defects + ': ' + u.defectPlaces.slice(0, 4).join(', ') : 'Nil']];
+          if (S.kpi.criterionRule) parts.push(NOTE([[S.kpi.criterionRule, { italics: true, size: 18 }]]));
           parts.push(T([{ h: 'Sl.', a: 'c', one: true }, { h: 'Item' }, ...U.map(u => ({ h: 'SSE/P.Way/' + u.label, a: 'c', free: true }))], items.map(([t, f], i) => [String(i + 1), t, ...U.map(f)])));
+          // trolley stretches still to walk, line by line, grouped by section (TMS Control's lineByLine.items)
+          const lbl = [];
+          U.forEach(u => { const it = u.trolleyItems || [], secs = [];
+            it.forEach(r => { if (secs.indexOf(r.section) < 0) secs.push(r.section); });
+            secs.forEach(sc => it.filter(r => r.section === sc).forEach((r, j) => lbl.push([...(U.length > 1 ? [j || sc !== secs[0] ? '' : u.label] : []),
+              j ? '' : (sc || '–'), r.line || '–', [r.kmFrom, r.kmTo].filter(v => v !== null && v !== undefined && v !== '').join(' – ') || '–',
+              val(r.kmToInspect), val(r.speed), r.need || '–']))); });
+          if (lbl.length) {
+            parts.push(SUB('Trolley / on-foot inspection – line by line'));
+            parts.push(T([...(U.length > 1 ? [{ h: 'Unit' }] : []), { h: 'Section' }, { h: 'Line', a: 'c' }, { h: 'Km from – to', a: 'c' }, { h: 'Km to inspect', a: 'c', one: true },
+              { h: 'Speed (km/h)', a: 'c', one: true }, { h: 'Inspection', free: true }], lbl, { size: 17, hsize: 17 }));
+          }
           if (S.kpi.warning) parts.push(NOTE([[S.kpi.warning, { italics: true, size: 18 }]]));
         }
-        add(head(11, 'KPI items', ok('kpi') && S.kpi.generatedAt ? 'TMS Control, ' + dmy(S.kpi.generatedAt.slice(0, 10)) + ' ' + S.kpi.generatedAt.slice(11, 16) : 'from TMS Control'), parts);
+        add(head(11, 'KPI items', ok('kpi') && S.kpi.generatedAt ? 'from TMS Control, ' + dmy(S.kpi.generatedAt.slice(0, 10)) + ' ' + S.kpi.generatedAt.slice(11, 16) : 'from TMS Control'), parts);
       }
       /* 12. blocks */
       {
@@ -877,5 +898,5 @@
     });
   }
   g.buildMorningDoc = buildMorningDoc;
-  if (typeof module !== 'undefined') module.exports = { buildMorningDoc };
+  if (typeof module !== 'undefined') module.exports = { buildMorningDoc, kpiTrolleyText };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

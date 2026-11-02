@@ -9,7 +9,10 @@
   // added to trolley (user, 02.11.2026). Null onFoot (before TMS Control's first recalculation): the line as before.
   function kpiTrolleyText(u, val, clip, gaps) {
     const below = (u.trolleyItems || []).length ? ' – line by line below' : '';
-    if (typeof u.onFoot === 'number') return val(u.trolley) + ' km not covered, of which ' + val(u.onFoot) + ' km above 110 km/h (on foot also counts)' + below;
+    // both figures with the same precision: the report's km rule (two decimals) when either has a fraction
+    if (typeof u.onFoot === 'number') { const dec = [u.trolley, u.onFoot].some(v => typeof v === 'number' && !Number.isInteger(v)),
+      km = v => typeof v === 'number' && dec ? v.toFixed(2) : val(v);
+      return km(u.trolley) + ' km not covered, of which ' + km(u.onFoot) + ' km above 110 km/h (on foot also counts)' + below; }
     if (below) return val(u.trolley) + below;
     return u.trolleyLines && u.trolleyLines.length ? val(u.trolley) + ' (still to walk, line by line: ' + clip(u.trolleyLines.join('; '), 150) + ')'
       : gaps(u.trolley, u.chart && u.chart.reaches ? u.chart.noTrolley : []);
@@ -387,7 +390,7 @@
               val(r.kmToInspect), val(r.speed), r.need || '–']))); });
           if (lbl.length) {
             parts.push(SUB('Trolley / on-foot inspection – line by line'));
-            parts.push(T([...(U.length > 1 ? [{ h: 'Unit' }] : []), { h: 'Section' }, { h: 'Line', a: 'c' }, { h: 'Km from – to', a: 'c' }, { h: 'Km to inspect', a: 'c', one: true },
+            parts.push(T([...(U.length > 1 ? [{ h: 'Unit' }] : []), { h: 'Section', slack: true }, { h: 'Line', a: 'c' }, { h: 'Km from – to', a: 'c', slack: true }, { h: 'Km to inspect', a: 'c', one: true },
               { h: 'Speed (km/h)', a: 'c', one: true }, { h: 'Inspection', free: true }], lbl, { size: 17, hsize: 17 }));
           }
           if (S.kpi.warning) parts.push(NOTE([[S.kpi.warning, { italics: true, size: 18 }]]));
@@ -574,7 +577,10 @@
         else {
           const want = sum(nat.map((x, j) => x - w[j]));
           if (want <= rem) { w = nat.slice(); rem -= want; } else { w = w.map((x, j) => x + (nat[j] - x) * rem / want); rem = 0; }
-          if (rem > 0) { const fr = cols.map((c, j) => c.free ? j : -1).filter(j => j >= 0), to = fr.length ? fr : cols.map((c, j) => j);
+          // the width left over goes to `slack` columns when a table names some (they are not the first to give way when
+          // it is tight; free columns are), else to the free columns, else to all
+          if (rem > 0) { const sl = cols.map((c, j) => c.slack ? j : -1).filter(j => j >= 0), fr = cols.map((c, j) => c.free ? j : -1).filter(j => j >= 0),
+            to = sl.length ? sl : fr.length ? fr : cols.map((c, j) => j);
             const base = sum(to.map(j => nat[j])); to.forEach(j => { w[j] += rem * nat[j] / base; }); }
         }
         w = w.map(Math.floor); const big = w.indexOf(Math.max(...w)); w[big] += total - sum(w);

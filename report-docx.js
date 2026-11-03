@@ -153,15 +153,15 @@
       /* ---------- abstract ---------- */
       const ok = k => S[k] && S[k].ok;
       const tdcN = ok('tdcLapse') ? S.tdcLapse.rows.length : null;
-      const excN = ok('miniControl') ? S.miniControl.rows.length : null;
+      const excN = ok('miniControl') ? S.miniControl.rows.length + (ok('pwiMc') ? S.pwiMc.rows.length : 0) : null;
       const failN = ok('major') && ok('minor') ? S.major.rows.length + S.minor.rows.length : null;
       const blk = ok('blocks') ? S.blocks : null, mc = ok('machines') ? S.machines : null;
       const nilOr = n => n === null ? '–' : (n === 0 ? 'Nil' : String(n));
       // † on a figure that comes from older data (the previous day's entry not yet in the sheet)
       const old = k => ok(k) && !!S[k].stale;
       const abstractCells = [
-        ['Caution past TDC', nilOr(tdcN), old('tdcLapse')], ['Mini control exceptions', nilOr(excN), old('miniControl')],
-        ['Failures (' + dm(R.period.day) + ')', nilOr(failN), old('major') || old('minor')],
+        ['Caution past TDC', nilOr(tdcN), old('tdcLapse')], ['Mini control exceptions', nilOr(excN), old('miniControl') || old('pwiMc')],
+        ['Failures (' + dm(ok('major') ? S.major.dataDate : R.period.day) + ')', nilOr(failN), old('major') || old('minor')],
         ['LCs with bad road', ok('badRoad') && S.badRoad.row ? val(S.badRoad.row.total) : '–', old('badRoad')],
         ['Blocks availed', blk ? blk.rows.length + ' (' + blk.rows.reduce((a, r) => a + (r.availed || 0), 0) + ' min)' : '–', !!blk && (blk.dayStale || blk.nightStale)],
         ['Blocks not availed', blk && blk.notAvailedDay !== null ? blk.notAvailedDay + ' (month: ' + blk.notAvailedMonth + ')' : '–', !!blk && !!blk.notAvailedStale],
@@ -191,15 +191,23 @@
       // every item of the list is in every report; a section whose source is not connected yet says so in one line
       const PENDING = what => NOTE([['To be added: ', { bold: true, size: 18 }], [what + '.', { italics: true, size: 18 }]]);
 
-      /* 1. mini control exceptions: AEN items; PWI items (deferred: no source yet) */
+      /* 1. mini control exceptions: AEN items (tab 46), PWI items (tab 47), IOW items (spec §14 item 1) */
       {
-        // PWI mini control items have no source yet (docs/phase-2-spec.md §3): one plain line, not an empty table row
-        const pwi = NOTE([['PWI mini control items: ', { size: SZ }], ['deferred', { size: SZ, italics: true }]], { before: 30 });
-        const mc = S.miniControl, parts = [];
-        if (!ok('miniControl')) parts.push(ERRP(mc), pwi);
-        else if (!mc.rows.length) parts.push(KV([['AEN mini control items', 'Nil']]), pwi);
-        else parts.push(SUB('AEN mini control items'), T([{ h: 'Item' }, { h: 'Details of exception', free: true }], mc.rows.map(r => [r.item, r.detail])), pwi);
-        // IOW mini control items (§8): the IOW exception sheet, laid out like the AEN tab; while it is empty, one line
+        const parts = [], mcL = (k, label) => {
+          const m = S[k];
+          if (!m) return [NOTE([[label + ': ', { size: SZ }], ['not read', { size: SZ, italics: true }]], { before: 30 })];
+          if (!m.ok) return [NOTE([[label + ' — could not be read: ', { bold: true, size: 18 }], [m.error, { italics: true, size: 18 }]], { before: 30 })];
+          const when = ' (position of ' + dmy(m.dataDate) + (m.stale ? ', older data' : '') + ')';
+          if (!m.rows.length) return [KV([[label + (k === 'miniControl' ? '' : when), 'Nil']])];
+          return [SUB(label + (k === 'miniControl' ? '' : when)), T([{ h: 'Item' }, { h: 'Details of exception', free: true }], m.rows.map(r => [r.item, r.detail]))];
+        };
+        const mc = S.miniControl, pw = S.pwiMc;
+        parts.push(...mcL('miniControl', 'AEN mini control items'));
+        // the PWI list's date is named only when it differs from the AEN list's
+        if (pw && pw.ok && mc && mc.ok && pw.dataDate === mc.dataDate && !!pw.stale === !!mc.stale)
+          parts.push(...(pw.rows.length ? [SUB('PWI mini control items'), T([{ h: 'Item' }, { h: 'Details of exception', free: true }], pw.rows.map(r => [r.item, r.detail]))] : [KV([['PWI mini control items', 'Nil']])]));
+        else parts.push(...mcL('pwiMc', 'PWI mini control items'));
+        // IOW mini control items (§8): the IOW exception sheet, laid out like the old AEN tab; while it is empty, one line
         const iw = S.iowMc, iwLine = (t, it) => NOTE([['IOW mini control items: ', { size: SZ }], [t, { size: SZ, italics: !!it }]], { before: 30 });
         if (!iw) parts.push(iwLine('not read', true));
         else if (!iw.ok) parts.push(NOTE([['IOW mini control items — could not be read: ', { bold: true, size: 18 }], [iw.error, { italics: true, size: 18 }]], { before: 30 }));
@@ -207,7 +215,7 @@
         else if (!iw.rows.length) parts.push(iwLine('Nil'));
         else parts.push(SUB('IOW mini control items (data of ' + dmy(iw.dataDate) + (iw.stale ? ', older data' : '') + ')'),
           T([{ h: 'Item' }, { h: 'Details of exception', free: true }], iw.rows.map(r => [r.item, r.detail])));
-        add(head(1, 'Mini control exceptions', ok('miniControl') ? 'data of ' + dmy(mc.dataDate) : null, ok('miniControl') && mc.stale ? notYet(dmy(R.period.day)) : null), parts);
+        add(head(1, 'Mini control exceptions', ok('miniControl') ? 'position of ' + dmy(mc.dataDate) : null, ok('miniControl') && mc.stale ? notYet(dmy(R.period.day)) : null), parts);
       }
       /* 2. winter patrolling (GPS) */
       {
@@ -404,7 +412,7 @@
         if (!ok('blocks')) parts.push(ERRP(S.blocks));
         else {
           const rows = S.blocks.rows, tot = rows.reduce((a, r) => a + (r.availed || 0), 0);
-          const naText = 'Blocks not availed by Engg.: ' + (S.blocks.notAvailedDay === null ? '–' : S.blocks.notAvailedDay) + ' on ' + dmy(R.period.day) + '; ' + S.blocks.notAvailedMonth + ' this month';
+          const naText = 'Blocks not availed by Engg.: ' + (S.blocks.notAvailedDay === null ? '–' : S.blocks.notAvailedDay) + ' on ' + dmy(S.blocks.notAvailedDate || R.period.day) + '; ' + S.blocks.notAvailedMonth + ' this month';
           parts.push(T([{ h: 'Sl.', a: 'c', one: true }, { h: 'Day / Night', a: 'c', one: true }, { h: 'Location' }, { h: 'Nature of work', free: true }, { h: 'Block availed (min)', a: 'c', one: true }, { h: 'Progress', free: true }],
             rows.length ? rows.map((r, i) => [String(i + 1), r.when, r.location, r.work, val(r.availed), r.progress]) : [[{ v: 'No block availed', span: 6, a: 'c' }]],
             { foot: [[{ v: 'Total', span: 4, bold: true, a: 'r' }, { v: String(tot), bold: true, a: 'c' }, { v: naText }]] }));
@@ -846,7 +854,7 @@
         [20, 16, [img(art.contents, 634, 16)]]];
       // the contents: the sections in this report, with the page each starts on (the top sheet is page 1)
       const has = n => n in secs, pg = n => String(secs[n] + 1);
-      const ITEMS = [[1, 'Mini control exceptions', [['AEN mini control items'], ['PWI mini control items', 'deferred'], ['IOW mini control items']]],
+      const ITEMS = [[1, 'Mini control exceptions', [['AEN mini control items'], ['PWI mini control items'], ['IOW mini control items']]],
         [2, 'Winter patrolling'], [3, S.pir && S.pir.ok && S.pir.rows.length ? 'Failures and PIRs' : 'Failures'], [4, 'Cautions and TDC overdue'], [5, 'Bad road surface at LC gates'],
         [6, 'NI LC inspection'], [7, 'CCTV recording check'], [8, 'Spot attention due'],
         [9, 'Work planned for the next day', [['Track-circuited area'], ['Non track-circuited area']]], [10, 'Inspections due'], [11, 'KPI items'],

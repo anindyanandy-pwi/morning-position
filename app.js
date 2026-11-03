@@ -33,7 +33,7 @@
   const weekday = iso => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-IN', { weekday: 'long', timeZone: 'UTC' });
   const town = office => String(office || '').replace(/^Assistant Divisional Engineer[\s,/]*/i, '').replace(/\s*\(.*\)\s*$/, '').replace(/^Track\/(.*)$/, '$1 (Track)');
   const two = n => String(n).padStart(2, '0');
-  const SECTION = { miniControl: 'Mini control', gps: 'Winter patrolling', major: 'Major failures', minor: 'Minor failures', tdcLapse: 'TDC lapse',
+  const SECTION = { miniControl: 'AEN mini control', pwiMc: 'PWI mini control', gps: 'Winter patrolling', major: 'Major failures', minor: 'Minor failures', tdcLapse: 'TDC lapse',
     pqrsTdc: 'PQRS TDC fail', protection: 'Protection caution', badRoad: 'Bad road surface', cctv: 'CCTV', niLc: 'NI LC inspection', kpi: 'KPI and inspections',
     blocks: 'Blocks', machines: 'Machines', tms: 'TMS items', file: 'Saved file' };
   const gapText = g => (SECTION[g.section] || g.section) + ': ' + (g.kind === 'stale' ? 'older data used' : g.text);

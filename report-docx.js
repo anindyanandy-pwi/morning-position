@@ -525,26 +525,38 @@
         }
         add(head(15, 'Worksite entry in TMS', ws && ws.ok ? 'worksites of ' + dmy(ws.dataDate) : null), parts);
       }
-      /* 16. worksite safety arrangement — PWI unit-wise (Field Mini Control "PWI at Work Site") and IOW unit-wise (the IOW
-         work-site protection log, placed by station), each worksite of the report day on one row (§7) */
+      /* 16. worksite safety arrangement — PWI unit-wise: the union of the TMS worksites of D-1 (section 15), "PWI at Work
+         Site" (day) and "PWI at Block Site" (night), each worksite once (spec §15); IOW unit-wise from the IOW work-site
+         protection log, placed by station (§7) */
       {
         const pw = S.pwiSites, iw = S.iowSites, parts = [], dates = [], late = [];
         const unitName = u => String(u).replace(/^\s*(SSE|JE)\s*\/\s*P\.?\s*W(ay)?\s*\/\s*/i, '');
         const errLine = (what, x) => NOTE([[what + ' — could not be read: ', { bold: true, size: 18 }], [x ? x.error : 'not read', { italics: true, size: 18 }]], { before: parts.length ? 30 : 0 });
         if (!pw || !pw.ok) parts.push(errLine('PWI unit-wise', pw));
         else {
-          dates.push(pw.dataDate); if (pw.stale) late.push('PWI entry for ' + dmy(R.period.day));
-          const rows = [];
+          const night = b => 'night ' + (b.from.slice(5, 7) === b.dataDate.slice(5, 7) ? b.from.slice(8, 10) : dm(b.from)) + '/' + dm(b.dataDate) + ' & day ' + dm(b.dataDate);
+          const srcs = [];
+          if (pw.tms.error) parts.push(errLine('TMS worksites', pw.tms)); else srcs.push('TMS ' + dmy(pw.tms.dataDate));
+          if (pw.work.error) parts.push(errLine('PWI at Work Site', pw.work)); else { srcs.push('Work Site ' + dmy(pw.work.dataDate)); if (pw.work.stale) late.push('PWI at Work Site for ' + dmy(pw.tms.dataDate || R.period.day)); }
+          if (pw.block.error) parts.push(errLine('PWI at Block Site', pw.block)); else { srcs.push('Block Site ' + night(pw.block)); if (pw.block.stale) late.push('PWI at Block Site for the night ending ' + dmy(R.period.day)); }
+          if (!pw.work.error) dates.push(pw.work.dataDate);
+          const rows = [], B = v => ({ v, bold: true });
           pw.units.forEach(u => {
-            if (!u.sites.length) { rows.push([unitName(u.unit), 'No worksite', '', '', '', '', '']); return; }
-            u.sites.forEach((x, i) => rows.push([i ? ' ' : unitName(u.unit), [x.block, x.line].filter(Boolean).join(' · ') + (x.work ? ': ' + x.work : ''),
-              x.caution || '–', x.certs + '/3', (x.pre || '–') + ' / ' + (x.post || '–'), x.checked || '–', x.remark || '–']));
+            if (!u.rows.length) { rows.push([unitName(u.unit), u.noWork ? 'No worksite' : 'Nothing entered', '', '', '', '', '', '', '', '']); return; }
+            u.rows.forEach((x, i) => rows.push([i ? ' ' : unitName(u.unit),
+              [x.block, x.line, x.km ? 'km ' + x.km : ''].filter(Boolean).join(' · ') + (x.work ? ': ' + x.work : '') + (x.sheetWork ? ' (' + x.sheetWork + ')' : ''),
+              x.when ? (x.when === 'night' ? 'night' + (x.timing ? '\n' + x.timing.replace(/\s*-\s*/g, '–').replace(/\n/g, ', ') : '') : 'day') : '–',
+              x.inTms === null ? '?' : x.inTms ? 'yes' : B('no'),
+              x.sheet || B('none'),
+              x.sheet ? x.caution || '–' : '–', x.sheet ? x.certs + '/3' : '–',
+              x.sheet ? (x.pre || '–') + ' / ' + (x.post || '–') : '–', x.sheet ? x.checked || '–' : '–', x.sheet ? x.remark || '–' : '–']));
           });
-          const n = pw.units.reduce((a, u) => a + u.sites.length, 0);
-          if (!pw.units.length) parts.push(KV([['PWI unit-wise', 'no rows for AEN/' + R.aen + ' in the tab']]));
-          else parts.push(SUB('PWI unit-wise (' + (n ? n + ' worksite' + (n > 1 ? 's' : '') : 'no worksite') + ', ' + dmy(pw.dataDate) + ')'),
-            T([{ h: 'Unit' }, { h: 'Block section · line: work', free: true }, { h: 'Caution', free: true }, { h: 'Certificates', a: 'c', one: true },
-              { h: 'Photos pre / post', a: 'c', one: true }, { h: 'Measurement checked', a: 'c' }, { h: 'AEN remark', free: true }], rows, { size: 17, hsize: 17 }));
+          const n = pw.units.reduce((a, u) => a + u.rows.length, 0);
+          if (!pw.units.length) parts.push(KV([['PWI unit-wise', 'no rows for AEN/' + R.aen + ' in TMS or the two tabs']]));
+          else parts.push(SUB('PWI unit-wise (' + (n ? n + ' worksite' + (n > 1 ? 's' : '') : 'no worksite') + '; ' + srcs.join(', ') + ')'),
+            T([{ h: 'Unit' }, { h: 'Block section · line: work', free: true }, { h: 'Night / day', a: 'c' }, { h: 'In TMS', a: 'c' }, { h: 'Safety sheet', a: 'c', one: true },
+              { h: 'Caution', free: true }, { h: 'Certifi- cates', a: 'c' }, { h: 'Photos pre / post', a: 'c', one: true }, { h: 'Measure- ment checked', a: 'c' }, { h: 'AEN remark', free: true }],
+              rows, { size: 16, hsize: 16 }));
         }
         if (!iw || !iw.ok) parts.push(errLine('IOW unit-wise', iw));
         else {

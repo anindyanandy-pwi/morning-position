@@ -7,15 +7,64 @@
 (function (g) {
   // section 11, trolley row. onFoot is the part of trolley above 110 km/h where on foot also counts: it is never
   // added to trolley (user, 02.11.2026). Null onFoot (before TMS Control's first recalculation): the line as before.
-  function kpiTrolleyText(u, val, clip, gaps) {
+  function kpiTrolleyText(u, val, win, dash) {
     const below = (u.trolleyItems || []).length ? ' – line by line below' : '';
+    if (u.trolley === null || u.trolley === undefined) return '–';
     // both figures with the same precision: the report's km rule (two decimals) when either has a fraction
-    if (typeof u.onFoot === 'number') { const dec = [u.trolley, u.onFoot].some(v => typeof v === 'number' && !Number.isInteger(v)),
+    const dec = typeof u.onFoot === 'number' && [u.trolley, u.onFoot].some(v => typeof v === 'number' && !Number.isInteger(v)),
       km = v => typeof v === 'number' && dec ? v.toFixed(2) : val(v);
-      return km(u.trolley) + ' km not covered, of which ' + km(u.onFoot) + ' km above 110 km/h (on foot also counts)' + below; }
-    if (below) return val(u.trolley) + below;
-    return u.trolleyLines && u.trolleyLines.length ? val(u.trolley) + ' (still to walk, line by line: ' + clip(u.trolleyLines.join('; '), 150) + ')'
-      : gaps(u.trolley, u.chart && u.chart.reaches ? u.chart.noTrolley : []);
+    const head = km(u.trolley) + ' km not covered (' + win + ')' +
+      (typeof u.onFoot === 'number' ? ', of which ' + km(u.onFoot) + ' km above 110 km/h (on foot also counts)' : '') + below;
+    if (below) return head;
+    const lines = u.trolleyLines && u.trolleyLines.length ? u.trolleyLines : (u.chart && u.chart.reaches ? u.chart.noTrolley : []);
+    return [head, ...(lines || []).map(dash)].join('\n');
+  }
+  /** Section 11's rows (label, value per unit), in plain wording (user, 03.11.2026, spec §14 item 7). */
+  function kpiRows(U, D, val) {
+    // plain wording (user, 03.11.2026, spec §14 item 7); every row means what it meant before
+    const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const per = k => (U.map(u => u[k]).filter(Boolean)[0] || null), mOf = p => p ? Number(p.slice(5, 7)) - 1 : null;
+    const thisM = mOf(per('thisPeriod')) !== null ? mOf(per('thisPeriod')) : Number(D.slice(5, 7)) - 1;
+    const lastM = mOf(per('lastPeriod')) !== null ? mOf(per('lastPeriod')) : (thisM + 11) % 12;
+    const of = (v, max) => v === null || v === undefined ? '–' : v + ' of ' + (max || 82);
+    const groupOf = x => {                                 // "(BHR)51B" -> BHR; "P&C (BSBR)54A" -> BSBR; else the type (LC, LWR) or first code
+      const s0 = typeof x === 'string' ? x : x.asset, t = typeof x === 'string' ? '' : (x.type || '');
+      let m = s0.match(/^\(([^)]+)\)\s*(.*)$/); if (m) return [m[1], m[2] || s0];
+      m = s0.match(/\(([A-Z]{2,5})\)/); if (m) return [m[1], s0];
+      if (t) return [t, s0];
+      m = s0.match(/^([A-Z]{2,5})\b/); return m ? [m[1], s0] : ['', s0];
+    };
+    // lists as lines, by station, with the count; over 12: the stations with their counts only (no "…")
+    const linesOf = (list, n) => {
+      if (!list || !list.length) return n ? String(n) : 'Nil';
+      const g = {}, order = [];
+      list.forEach(x => { const [k, v] = groupOf(x); if (!g[k]) { g[k] = []; order.push(k); } g[k].push(v); });
+      const all = (n || list.length) + ' in all';
+      if (list.length > 12) return [all, ...order.map(k => (k || 'Others') + ': ' + g[k].length)].join('\n');
+      return (order.length > 1 || (n && n !== list.length) ? [all] : []).concat(order.map(k => (k ? k + ' (' + g[k].length + '): ' : '') + g[k].join(', '))).join('\n');
+    };
+    const lost = u => !u.shortfalls.length ? 'Nil' : u.shortfalls.map(x => typeof x === 'string' ? x : x.name + ': ' + x.marks + ' of ' + x.max).join('\n');
+    const frac = (n, f) => f ? n + ' ' + f.done + ' of ' + f.total : null;
+    const chartDone = u => !u.chart ? 'Not received' : !u.chart.reaches ? 'Chart not yet received for this month'
+      : [frac('P&C', u.chart.pc), frac('LC', u.chart.lc), frac('LWR', u.chart.lwr), frac('Curves', u.chart.curves)].filter(Boolean).join('\n') || '–';
+    const dash = t => String(t).replace(/\s*--\s*/g, '–');
+    // the fortnight and the two-month trolley window are the report date's
+    const dd = Number(D.slice(8, 10)), dM = Number(D.slice(5, 7)) - 1, lastDay = new Date(Date.UTC(Number(D.slice(0, 4)), dM + 1, 0)).getUTCDate();
+    const fortnight = (dd <= 15 ? '1–15 ' : '16–' + lastDay + ' ') + MON[dM];
+    const kmLines = (km, win, a) => km === null || km === undefined ? '–' : [val(km) + ' km not covered (' + win + ')', ...(a || []).map(dash)].join('\n');
+    const trolleyWin = MON[(dM + 11) % 12] + '–' + MON[dM];
+    const items = [['Marks for ' + LONG[lastM], u => of(u.lastMonth, u.max)],
+      ['Marks for ' + LONG[thisM] + ' so far (forecast at month end)', u => of(u.thisMonth, u.max)],
+      ['Marks being lost on', lost],
+      ['Inspections due this month (TMS plan)', u => linesOf(u.due)], ['Inspections planned earlier, not done', u => linesOf(u.lateFromPlan)],
+      ['Inspections overdue', u => u.overdueCount ? linesOf(u.overdue, u.overdueCount) : 'Nil'],
+      ['Inspected this month (TMS inspection chart)' + (dd <= 5 ? ' (month began 01.' + D.slice(5, 7) + ')' : ''), chartDone],
+      ['Foot plate inspection – km not covered', u => kmLines(u.footPlate, 'fortnight ' + fortnight, u.chart && u.chart.reaches ? u.chart.noFootPlate : [])],
+      [U.some(u => typeof u.onFoot === 'number') ? 'Trolley / on-foot inspection – km not covered' : 'Trolley inspection – km not covered',
+        u => kpiTrolleyText(u, val, trolleyWin, dash)],
+      ['Defects crossing 10 days', u => u.defects ? linesOf(u.defectPlaces, u.defects) : 'Nil']];
+    return items;
   }
   function buildMorningDoc(X, R, opts) {
     opts = opts || {};
@@ -372,21 +421,7 @@
         const parts = [];
         if (!ok('kpi')) parts.push(ERRP(S.kpi));
         else {
-          const U = S.kpi.units, list = (a, max) => !a || !a.length ? 'Nil' : a.length + ': ' + a.slice(0, max).join(', ') + (a.length > max ? ' …' : '');
-          const frac = (n, f) => f ? n + ' ' + f.done + '/' + f.total : null;
-          const chartDone = u => !u.chart ? 'Not received' : !u.chart.reaches ? 'Chart not yet received for this month'
-            : [frac('P&C', u.chart.pc), frac('LC', u.chart.lc), frac('LWR', u.chart.lwr), frac('Curves', u.chart.curves)].filter(Boolean).join(', ') || '–';
-          const clip = (t, n) => t.length > n ? t.slice(0, t.lastIndexOf(' ', n) > n * 0.6 ? t.lastIndexOf(' ', n) : n).replace(/[,;\s]+$/, '') + ' …' : t;
-          const gaps = (km, a) => val(km) + (a && a.length ? ' (' + clip(a.join('; '), 150) + ')' : '');
-          const items = [['KPI marks, last month (out of 82)', u => val(u.lastMonth)], ['KPI marks, this month – forecast (out of 82)', u => val(u.thisMonth)],
-            ['KPIs short of full marks', u => u.shortfalls.length ? u.shortfalls.join(', ') : 'Nil'],
-            ['Inspections due this month (TMS plan)', u => list(u.due, 6)], ['Inspections planned earlier, not done', u => list(u.lateFromPlan, 6)],
-            ['Inspections overdue', u => u.overdueCount ? u.overdueCount + ': ' + u.overdue.slice(0, 6).join(', ') + (u.overdue.length > 6 ? ' …' : '') : 'Nil'],
-            ['Inspected this month (TMS inspection chart)', chartDone],
-            ['Foot plate inspection – km not covered this fortnight', u => gaps(u.footPlate, u.chart && u.chart.reaches ? u.chart.noFootPlate : [])],
-            [U.some(u => typeof u.onFoot === 'number') ? 'Trolley / on-foot inspection – km not covered (2 months)' : 'Trolley inspection – km not covered (2 months)',
-              u => kpiTrolleyText(u, val, clip, gaps)],
-            ['Defects crossing 10 days', u => u.defects ? u.defects + ': ' + u.defectPlaces.slice(0, 4).join(', ') : 'Nil']];
+          const U = S.kpi.units, items = kpiRows(U, D, val);
           if (S.kpi.criterionRule) parts.push(NOTE([[S.kpi.criterionRule, { italics: true, size: 18 }]]));
           parts.push(T([{ h: 'Sl.', a: 'c', one: true }, { h: 'Item' }, ...U.map(u => ({ h: 'SSE/P.Way/' + u.label, a: 'c', free: true }))], items.map(([t, f], i) => [String(i + 1), t, ...U.map(f)])));
           // trolley stretches still to walk, line by line, grouped by section (TMS Control's lineByLine.items)
@@ -912,5 +947,5 @@
     });
   }
   g.buildMorningDoc = buildMorningDoc;
-  if (typeof module !== 'undefined') module.exports = { buildMorningDoc, kpiTrolleyText };
+  if (typeof module !== 'undefined') module.exports = { buildMorningDoc, kpiTrolleyText, kpiRows };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

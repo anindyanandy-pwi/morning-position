@@ -37,6 +37,10 @@
     pqrsTdc: 'PQRS TDC fail', protection: 'Protection caution', badRoad: 'Bad road surface', cctv: 'CCTV', niLc: 'NI LC inspection', kpi: 'KPI and inspections',
     blocks: 'Blocks', machines: 'Machines', tms: 'TMS items', file: 'Saved file' };
   const gapText = g => (SECTION[g.section] || g.section) + ': ' + (g.kind === 'stale' ? 'older data used' : g.text);
+  // "why a gap" (spec §13): reason codes in plain words
+  const REASON = { 'not-entered': 'Not entered yet — the sheet is behind the date', 'date-form': 'Date written in an unusual form', 'tab-missing': 'Tab name not found',
+    'columns-changed': 'A column heading has changed', 'not-placed': 'Rows not placed under any AEN', 'reader-not-run': 'The TMS reader has not uploaded it yet',
+    'source-error': 'The source could not be read' };
 
   /* ---------- sign-in ---------- */
   const showStep = code => { $('stepEmail').hidden = code; $('stepCode').hidden = !code; (code ? $('loginCode') : $('loginEmail')).focus(); };
@@ -155,8 +159,8 @@
     if (busy[a.aen] === 'queue') return { cls: 'wait', st: 'Queued' };
     if (failed[a.aen]) return { cls: 'bad', st: 'Not prepared', gaps: [failed[a.aen]] };
     if (!a.latest) return { cls: 'wait', st: 'Not prepared yet' };
-    const g = a.latest.gaps || [];
-    return g.length ? { cls: 'gap', st: 'Ready, ' + g.length + (g.length > 1 ? ' gaps' : ' gap'), gaps: g.map(gapText) } : { cls: 'ok', st: 'Ready' };
+    const all = a.latest.gaps || [], g = all.filter(x => x.kind !== 'note'), notes = all.filter(x => x.kind === 'note');
+    return g.length ? { cls: 'gap', st: 'Ready, ' + g.length + (g.length > 1 ? ' gaps' : ' gap'), gaps: g, notes } : { cls: 'ok', st: 'Ready', notes };
   }
   function drawToday() {
     drawHero();
@@ -168,7 +172,14 @@
       const t = el('div', 'tile' + (s.cls === 'gap' || s.cls === 'bad' ? ' gap' : s.cls === 'run' ? ' run' : ''));
       const meta = el('div', 'meta'); meta.append(el('span', '', two(i + 1)), el('span', '', a.latest ? a.latest.at + (a.count > 1 ? ' · ×' + a.count : '') : '—'));
       t.append(meta, el('div', 'code', a.aen), el('div', 'town', town(a.office)), el('div', 'st ' + s.cls, s.st));
-      const gp = el('div', 'gaps'); (s.gaps || []).forEach((g, k) => { if (k) gp.appendChild(el('br')); gp.appendChild(document.createTextNode(g)); }); t.appendChild(gp);
+      // each gap is a link to its explanation; notes that are not gaps follow in grey (spec §13)
+      const gp = el('div', 'gaps');
+      (s.gaps || []).forEach(g => { const line = el('div');
+        if (typeof g === 'string') line.textContent = g;
+        else { const b = el('button', 'why-link', gapText(g)); b.onclick = () => openWhy(a, g); line.appendChild(b); }
+        gp.appendChild(line); });
+      (s.notes || []).forEach(g => { const b = el('button', 'why-link note', (SECTION[g.section] || g.section) + ': ' + (REASON[g.reason] || g.reason).toLowerCase()); b.onclick = () => openWhy(a, g); gp.appendChild(b); });
+      t.appendChild(gp);
       const acts = el('div', 'acts');
       if (!busy[a.aen]) {
         const g = el('button', a.latest ? 'btn-text' : 'btn-line', a.latest ? 'Generate again' : 'Generate'); g.onclick = () => runQueue([a.aen]);
@@ -199,6 +210,24 @@
     line('TMS inspection plan', when(s.inspPlan));
     line('TMS Control', s.tmsControl && s.tmsControl.at ? when({ at: String(s.tmsControl.at).replace('T', ' ').slice(0, 16) }) : 'not found');
   }
+  /** The explanation of one gap or note: the tab link first, then what was looked for, what was found and why (spec §13). */
+  function openWhy(a, g) {
+    const box = $('whyBody'); box.innerHTML = '';
+    $('whyTitle').textContent = 'AEN/' + a.aen + ' · ' + (SECTION[g.section] || g.section);
+    const w = g.why || {}, where = w.where || {};
+    const row = (k, v) => { if (!v) return; const r = el('div', 'why-row'); r.append(el('div', 'label', k), v instanceof Node ? v : el('div', '', v)); box.appendChild(r); };
+    const src = el('div'); src.appendChild(document.createTextNode(where.label || 'Source not recorded'));
+    if (where.url) { src.appendChild(el('br')); const l = el('a', '', 'Open the tab ↗'); l.href = where.url; l.target = '_blank'; l.rel = 'noopener'; src.appendChild(l); }
+    if (where.at) src.appendChild(el('div', 'small', 'Uploaded ' + where.at));
+    row('Where', src);
+    row('Reason', REASON[w.reason || g.reason] || (g.kind === 'error' ? REASON['source-error'] : ''));
+    row('Looked for', w.lookedFor);
+    row('Found', w.found || (g.kind === 'note' ? g.text : g.kind === 'error' ? g.text : ''));
+    if (!g.why && g.kind !== 'note') row('Note', 'This report was prepared before explanations were recorded; generate it again to see why.');
+    if (g.placements && me.role === 'admin') { const b = el('button', 'btn-line', 'Open Placements'); b.onclick = () => { $('why').close(); show('vPlace'); }; box.appendChild(b); }
+    $('why').showModal();
+  }
+  $('whyClose').onclick = () => $('why').close();
   // Every click makes a fresh report from the latest data, for all ten offices.
   $('genAll').onclick = () => runQueue(today.aens.map(a => a.aen));
   function runQueue(list) { return runQueue_(list).catch(e => { tell(e.message, 'err'); console.error(e); }); }
@@ -294,7 +323,36 @@
         const ul = el('ul'); lines.forEach(l => ul.appendChild(el('li', '', l))); iss.appendChild(ul);
       }));
       if (!iss.children.length) iss.appendChild(el('p', 'empty', 'Nothing to look at.'));
+      drawSourcesTable(s.sourcesTable || {});
     } catch (e) { tell(e.message, 'err'); console.error(e); }
+  }
+  /**
+   * Sources down, the ten AENs across: the date each AEN's latest report found in each source (spec §13). Green: current by
+   * the section's own rule; amber: one day older than that; red: older, none or unreadable. Each cell links to the tab.
+   */
+  function drawSourcesTable(st) {
+    const box = $('dSources'); box.innerHTML = '';
+    const aens = me.offices.map(o => o.aen).filter(a => st[a]);
+    if (!aens.length) { box.appendChild(el('p', 'empty', 'No report has been prepared since this table was added.')); return; }
+    const order = [], cell = {};
+    aens.forEach(a => (st[a].rows || []).forEach(r => { if (!order.includes(r.source)) order.push(r.source); const k = r.source + '|' + a;
+      if (!cell[k] || r.error || (r.stale && !cell[k].error)) cell[k] = r; }));
+    const tb = el('table', 't src-t'), hd = el('tr'); hd.appendChild(el('th', '', 'Source'));
+    aens.forEach(a => { const th = el('th', ''); th.append(el('div', '', a), el('div', 'small', dmy(st[a].date).slice(0, 5) + ' ' + String(st[a].generatedAt || '').slice(11))); hd.appendChild(th); });
+    const thead = el('thead'); thead.appendChild(hd); tb.appendChild(thead);
+    const body = el('tbody');
+    order.forEach(src => { const tr = el('tr'); tr.appendChild(el('td', 'src-name', src));
+      aens.forEach(a => { const r = cell[src + '|' + a], td = el('td', 'src-c');
+        if (!r) { td.textContent = ''; tr.appendChild(td); return; }
+        const behind = r.date && r.stale && r.date >= addDays(st[a].date, -2);
+        td.className = 'src-c ' + (r.error || !r.date ? 'red' : !r.stale ? 'green' : behind ? 'amber' : 'red');
+        const txt = r.error ? 'not read' : r.date ? dmy(r.date).slice(0, 5) : 'none';
+        const v = r.url ? el('a', '', txt) : el('span', '', txt); if (r.url) { v.href = r.url; v.target = '_blank'; v.rel = 'noopener'; }
+        td.appendChild(v); if (r.at) td.appendChild(el('div', 'small', String(r.at).slice(11, 16)));
+        td.title = [r.error, r.reason ? REASON[r.reason] : '', r.at ? 'uploaded ' + r.at : ''].filter(Boolean).join(' · ');
+        tr.appendChild(td); });
+      body.appendChild(tr); });
+    tb.appendChild(body); box.appendChild(tb);
   }
   /** The server's placementKey(): where without dates + the row's text, upper case, spaces collapsed. */
   const placeKey = (where, text) => String(where || '').toUpperCase().replace(/\b\d{1,2}[.\/-]\d{1,2}[.\/-]\d{2,4}\b/g, '').replace(/\s+/g, ' ').trim()

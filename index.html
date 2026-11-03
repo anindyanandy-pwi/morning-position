@@ -186,6 +186,11 @@
         <div class="label">Received from the TMS reader</div>
         <div class="table-box"><table class="t" style="min-width:600px"><thead><tr><th>Received</th><th>What</th><th>For date</th><th>Rows</th></tr></thead><tbody id="dUploads"></tbody></table></div>
       </div>
+      <div class="block">
+        <div class="label">Sources the latest reports read</div>
+        <p class="small">The date each AEN's latest report found in each source. Green: current; amber: one day behind; red: older, none or not read. A date opens its tab; TMS sources show the reader's upload time.</p>
+        <div class="table-box" id="dSources"></div>
+      </div>
       <div class="block issues">
         <div class="label">Rows that need attention</div>
         <p class="small">Entries not yet placed under an AEN (answer them on the Placements page), times and dates that Google Sheets had changed.</p>
@@ -195,6 +200,11 @@
   </main>
   <footer class="wrap credit">Designed &amp; developed by Anindya Nandy · SSE/P.Way/Planning, Howrah Division</footer>
 </div>
+
+<dialog id="why" class="why">
+  <div class="why-head"><div class="h2" id="whyTitle" style="font-size:20px"></div><button class="btn-text" id="whyClose">Close</button></div>
+  <div id="whyBody"></div>
+</dialog>
 
 <script src="app.js"></script>
 </body>

@@ -392,7 +392,11 @@
           const odd = wp.rows.filter(x => x.tc === 'unclear');
           if (odd.length) parts.push(NOTE([['Note: ', { bold: true, size: 17 }], ['"Whether track circuit" not clear for ' + odd.map(x => x.location || x.work).join('; ') + ' (entered as ' + [...new Set(odd.map(x => '"' + x.tcRaw + '"'))].join(', ') + '); listed as non track-circuited.', { italics: true, size: 17 }]], { before: 20 }));
         }
-        add(head(9, 'Work planned for the next day', 'plan for ' + dmy(D) + (wp.ok && wp.inferredDate ? ', its date taken from the next day\'s heading' : '')), parts,
+        const wpSub = !wp.ok ? ''
+          : wp.kept ? 'plan for ' + dmy(D) + ' (as read at ' + (wp.keptAt ? String(wp.keptAt).slice(11, 16) : '—') + '; no longer in the sheet)'
+          : wp.substitute ? 'plan for ' + dmy(wp.dataDate) + ' — the plan for ' + dmy(wp.wantedDate) + ' is not in the sheet'
+          : 'plan for ' + dmy(D) + (wp.inferredDate ? ', its date taken from the next day\'s heading' : '');
+        add(head(9, 'Work planned for the next day', wpSub), parts,
           { wide: !!(wp.ok && wp.entered && wp.rows.length) });     // ten columns need the full width; long locations and stations wrap
       }
       /* 10. inspections due — TMS plans inspections by month: what is planned for this month and not yet done, per SSE and

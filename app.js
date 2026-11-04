@@ -27,7 +27,7 @@
   const tell = (text, kind) => say($('msg'), text, kind);
 
   /* ---------- dates and names ---------- */
-  const dmy = iso => iso.split('-').reverse().join('.');
+  const dmy = iso => iso ? iso.split('-').reverse().join('.') : '\u2014';
   const dotted = iso => iso.split('-').reverse().join('·');
   const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
   const weekday = iso => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-IN', { weekday: 'long', timeZone: 'UTC' });
@@ -337,6 +337,10 @@
       (s.uploads || []).forEach(u => { const tr = el('tr'); [u.at, KIND[u.kind] || u.kind, u.date ? dmy(u.date) : '—', u.rows == null ? '' : u.rows].forEach(v => tr.appendChild(el('td', '', v))); ub.appendChild(tr); });
       if (!(s.uploads || []).length) { const tr = el('tr'); const td = el('td', '', 'Nothing received yet.'); td.colSpan = 4; tr.appendChild(td); ub.appendChild(tr); }
       const iss = $('dIssues'); iss.innerHTML = '';
+      if (s.selfCheck && s.selfCheck.at) { const p = (s.selfCheck.problems || []).length;
+        const sc = el('p', 'small' + (p ? ' err' : ''), 'Source check ' + String(s.selfCheck.at).slice(11, 16) + ': '
+          + (p ? p + ' source' + (p > 1 ? 's' : '') + " can't be read — " + s.selfCheck.problems.join(', ') : 'every source resolved'));
+        iss.appendChild(sc); }
       Object.keys(s.issues || {}).sort().reverse().slice(0, 7).forEach(d => Object.keys(s.issues[d]).forEach(a => {
         // rows already answered on the Placements page are not shown again (spec §12)
         const placed = new Set(s.placed || []), open = (it => (it.unassigned || []).filter(x => { const i = x.indexOf(': ');
@@ -347,7 +351,7 @@
         iss.appendChild(el('b', '', dmy(d) + ' · AEN/' + a));
         const ul = el('ul'); lines.forEach(l => ul.appendChild(el('li', '', l))); iss.appendChild(ul);
       }));
-      if (!iss.children.length) iss.appendChild(el('p', 'empty', 'Nothing to look at.'));
+      if (!iss.querySelector('b')) iss.appendChild(el('p', 'empty', 'No placement or date issues to look at.'));
       drawSourcesTable(s.sourcesTable || {});
       drawRepairs(s.repairs || {});
     } catch (e) { tell(e.message, 'err'); console.error(e); }
@@ -389,7 +393,8 @@
    * the section's own rule; amber: one day older than that; red: older, none or unreadable. Each cell links to the tab.
    */
   /* ---------- Sources (spec §17): every source, linked, read-only ---------- */
-  const STATE = { ok: 'OK', stale: 'Older data', repaired: 'Repaired', error: 'Error', missing: 'Tab not found', unread: 'Not read yet' };
+  const STATE = { current: 'Current', repaired: 'Repaired', nothingForAen: 'Nothing for this AEN',
+    olderData: 'Older data', readerNotRun: 'Reader not run today', cantRead: "Can't read", notGenerated: 'Not generated yet' };
   let sources = null;
   async function loadSources() {
     const box = $('sTable');
@@ -408,6 +413,13 @@
       box.appendChild(row);
     });
     if (v.account) box.appendChild(el('p', 'small', 'All of them are read with ' + v.account + ', and only read.'));
+    if (v.selfCheck && v.selfCheck.at) { const p = v.selfCheck.problems || 0;
+      box.appendChild(el('p', 'small' + (p ? ' err' : ''), 'Source check at ' + String(v.selfCheck.at).slice(11, 16) + ': '
+        + (p ? p + ' source' + (p > 1 ? 's' : '') + " can't be read — see the red rows below" : 'every source resolved'))); }
+    if (v.generated) { const n = v.generated.length;
+      box.appendChild(el('p', 'small', n + ' of the ' + v.offices + ' offices prepared for ' + dmy(v.date)
+        + (n ? ' \u2014 ' + v.generated.join(', ') + '. A source only they read reports what they found; "Not generated yet" means no report has reached it yet.'
+             : '. Nothing has been read yet today, so every state below says so.'))); }
   }
   function drawSourceRows(v) {
     const box = $('sTable'); box.innerHTML = '';
@@ -429,14 +441,15 @@
       if (r.url) { const a = el('a', '', 'Open ↗'); a.href = r.url; a.target = '_blank'; a.rel = 'noopener'; op.appendChild(a); }
       else op.appendChild(el('span', 'small', r.tms || r.tmsc ? 'read by the TMS reader' : '—'));
       tr.appendChild(op);
-      const dt = el('td', 'src-c ' + dateClass(r, v.date));
+      const dt = el('td', 'src-c ' + dateClass(r));
       dt.appendChild(el('span', '', r.date ? dmy(r.date) : (r.read ? 'none' : '—')));
       if (!r.sameEverywhere) { const u = el('div', 'small');
         u.textContent = r.perAen.map(x => x.aen + ' ' + (x.date ? dmy(x.date).slice(0, 5) : '—')).join(' · '); dt.appendChild(u); }
       tr.appendChild(dt);
       tr.appendChild(el('td', 'src-c', r.lastRead ? String(r.lastRead).slice(11, 16) : '—'));
       const st = el('td', 'src-state');
-      const b = el('button', 'why-link state-' + r.state, STATE[r.state] || r.state);
+      const label = (r.state === 'olderData' && r.date) ? STATE.olderData + ' — ' + dmy(r.date).slice(0, 5) : (STATE[r.state] || r.state);
+      const b = el('button', 'why-link state-' + r.state, label);
       b.onclick = () => openSourceWhy(r);
       st.appendChild(b);
       if (r.repairs || r.dateMoves) st.appendChild(el('div', 'small', [r.repairs ? r.repairs + ' heading' : '', r.dateMoves ? 'block date from the rows' : ''].filter(Boolean).join(' · ')));
@@ -445,8 +458,8 @@
       rc.onclick = async () => { rc.disabled = true; said.className = 'small'; said.textContent = 'Re-reading…';
         try { const x = await call('recheck', { aen: r.whyAen || me.offices[0].aen, date: D, section: r.section });
           said.className = 'small ' + (x.fixed ? 'ok' : '');
-          said.textContent = x.fixed ? 'Fixed now: ' + dmy(x.dataDate) + ' — press Generate again'
-            : 'Still the same' + (x.dataDate ? ': newest ' + dmy(x.dataDate) : '') + ' (' + x.at.slice(11) + ')';
+          said.textContent = x.fixed ? 'Fixed now' + (x.dataDate ? ': ' + dmy(x.dataDate) : '') + ' — press Generate again'
+            : 'Still the same' + (x.dataDate ? ': newest ' + dmy(x.dataDate) : '') + (x.at ? ' (' + String(x.at).slice(11) + ')' : '');
         } catch (e) { said.className = 'small err'; said.textContent = e.message; }
         rc.disabled = false; };
       st.append(rc, said);
@@ -455,8 +468,8 @@
     });
     tb.appendChild(body); box.appendChild(tb);
   }
-  const dateClass = (r, D) => r.state === 'error' || r.state === 'missing' || !r.date ? 'red'
-    : r.date >= addDays(D, -1) ? 'green' : r.date >= addDays(D, -2) ? 'amber' : 'red';
+  const dateClass = r => ({ current: 'green', repaired: 'green', olderData: 'amber', readerNotRun: 'amber',
+    cantRead: 'red', nothingForAen: 'neutral', notGenerated: 'grey' }[r.state] || 'grey');
   /** The same explanation the tile shows, opened from a source row. */
   async function openSourceWhy(r) {
     if (!r.whyAen || !r.whySnapshot) { tell('No saved report has read this source yet — generate one first.', 'err'); return; }

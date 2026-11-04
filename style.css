@@ -154,6 +154,7 @@ table.src-t td.src-name{min-width:220px}
 table.src-t td.src-c{text-align:center;font-family:var(--mono);font-size:12px;white-space:nowrap}
 table.src-t td.src-c a{color:inherit}
 td.src-c.green{background:#e8f2e6;color:var(--ok)} td.src-c.amber{background:#fdf0db;color:var(--warn)} td.src-c.red{background:#f8e3df;color:var(--bad)}
+td.src-c.neutral{background:var(--warn-soft);color:var(--muted)} td.src-c.grey{background:var(--ground);color:var(--faint)}
 /* column repairs on Data and checks (spec §16) */
 .repair-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:7px 0;border-bottom:1px solid var(--rule-soft);font-size:14px}
 .repair-row .repair-acts{display:flex;gap:10px;align-items:center;white-space:nowrap}
@@ -175,8 +176,9 @@ td.src-c.green{background:#e8f2e6;color:var(--ok)} td.src-c.amber{background:#fd
 .src-sec{white-space:nowrap}
 .src-state{white-space:nowrap}
 .src-state .btn-text{margin-left:10px}
-.state-ok{color:var(--ok)}
-.state-stale,.state-repaired{color:var(--warn)}
-.state-error,.state-missing,.state-unread{color:var(--bad)}
+.state-current,.state-repaired{color:var(--ok)}
+.state-olderData,.state-readerNotRun{color:var(--warn)}
+.state-cantRead{color:var(--bad)}
+.state-nothingForAen{color:var(--muted)} .state-notGenerated{color:var(--faint)}
 .src-list .small.ok{color:var(--ok)}
 .src-list .small.err{color:var(--bad)}

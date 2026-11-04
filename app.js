@@ -40,7 +40,7 @@
   // "why a gap" (spec §13): reason codes in plain words
   const REASON = { 'not-entered': 'Not entered yet — the sheet is behind the date', 'date-form': 'Date written in an unusual form', 'tab-missing': 'Tab name not found',
     'columns-changed': 'A column heading has changed', 'not-placed': 'Rows not placed under any AEN', 'reader-not-run': 'The TMS reader has not uploaded it yet',
-    'source-error': 'The source could not be read' };
+    'source-error': 'The source could not be read', 'column-repair': 'Column heading repaired' };
 
   /* ---------- sign-in ---------- */
   const showStep = code => { $('stepEmail').hidden = code; $('stepCode').hidden = !code; (code ? $('loginCode') : $('loginEmail')).focus(); };
@@ -324,7 +324,30 @@
       }));
       if (!iss.children.length) iss.appendChild(el('p', 'empty', 'Nothing to look at.'));
       drawSourcesTable(s.sourcesTable || {});
+      drawRepairs(s.repairs || {});
     } catch (e) { tell(e.message, 'err'); console.error(e); }
+  }
+  /** Column repairs the program made on its own (spec §16): Keep stores the new name (note stops); Undo makes it a gap again. */
+  function drawRepairs(rep) {
+    const box = $('dRepairs'); box.innerHTML = '';
+    const tabs = Object.keys(rep).filter(t => (rep[t].list || []).length);
+    if (!tabs.length) { box.appendChild(el('p', 'empty', 'No column changes — every heading was read as known.')); return; }
+    tabs.forEach(t => {
+      box.appendChild(el('b', '', rep[t].tab + (rep[t].at ? ' · ' + rep[t].at : '')));
+      rep[t].list.forEach(r => {
+        const row = el('div', 'repair-row');
+        row.appendChild(el('span', '', '"' + r.from + '" → "' + r.to + '"' + (r.via && r.via !== 'alt' ? ' (by ' + r.via + ')' : '')));
+        const acts = el('span', 'repair-acts');
+        const keep = el('button', 'btn-line', 'Keep'); keep.onclick = () => decideRepair('keepRepair', r.tab || rep[t].tab, r.col, r.to, keep);
+        const undo = el('button', 'btn-text', 'Undo'); undo.onclick = () => decideRepair('undoRepair', r.tab || rep[t].tab, r.col, r.to, undo);
+        acts.append(keep, undo); row.appendChild(acts); box.appendChild(row);
+      });
+    });
+  }
+  async function decideRepair(fn, tab, col, to, btn) {
+    btn.disabled = true;
+    try { const s = await call(fn, { tab, col, to }); drawRepairs(s.repairs || {}); }
+    catch (e) { btn.disabled = false; tell(e.message, 'err'); }
   }
   /**
    * Sources down, the ten AENs across: the date each AEN's latest report found in each source (spec §13). Green: current by

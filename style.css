@@ -158,3 +158,10 @@ td.src-c.green{background:#e8f2e6;color:var(--ok)} td.src-c.amber{background:#fd
 .repair-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:7px 0;border-bottom:1px solid var(--rule-soft);font-size:14px}
 .repair-row .repair-acts{display:flex;gap:10px;align-items:center;white-space:nowrap}
 #dRepairs b{display:block;margin:12px 0 2px;font-size:13px}
+
+/* the "why" panel's footer: how old the reading is, and what to do about it (spec §16 items 11 and 12) */
+.why-foot{margin-top:18px;padding-top:14px;border-top:1px solid var(--rule-soft)}
+.why-acts{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.why-foot .small{color:var(--muted);line-height:1.5}
+.why-foot .small.ok{color:var(--ok)}
+.why-foot .small.err{color:var(--bad)}

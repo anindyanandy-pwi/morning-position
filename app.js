@@ -40,7 +40,8 @@
   // "why a gap" (spec §13): reason codes in plain words
   const REASON = { 'not-entered': 'Not entered yet — the sheet is behind the date', 'date-form': 'Date written in an unusual form', 'tab-missing': 'Tab name not found',
     'columns-changed': 'A column heading has changed', 'not-placed': 'Rows not placed under any AEN', 'reader-not-run': 'The TMS reader has not uploaded it yet',
-    'source-error': 'The source could not be read', 'column-repair': 'Column heading repaired' };
+    'source-error': 'The source could not be read', 'column-repair': 'Column heading repaired',
+    'date-from-rows': 'Block date taken from the rows' };
 
   /* ---------- sign-in ---------- */
   const showStep = code => { $('stepEmail').hidden = code; $('stepCode').hidden = !code; (code ? $('loginCode') : $('loginEmail')).focus(); };
@@ -176,9 +177,10 @@
       const gp = el('div', 'gaps');
       (s.gaps || []).forEach(g => { const line = el('div');
         if (typeof g === 'string') line.textContent = g;
-        else { const b = el('button', 'why-link', gapText(g)); b.onclick = () => openWhy(a, g); line.appendChild(b); }
+        else { const b = el('button', 'why-link', gapText(g)); b.title = asRead(a); b.onclick = () => openWhy(a, g); line.appendChild(b); }
         gp.appendChild(line); });
-      (s.notes || []).forEach(g => { const b = el('button', 'why-link note', (SECTION[g.section] || g.section) + ': ' + (REASON[g.reason] || g.reason).toLowerCase()); b.onclick = () => openWhy(a, g); gp.appendChild(b); });
+      (s.notes || []).forEach(g => { const b = el('button', 'why-link note', (SECTION[g.section] || g.section) + ': ' + (REASON[g.reason] || g.reason).toLowerCase());
+        b.title = asRead(a); b.onclick = () => openWhy(a, g); gp.appendChild(b); });
       t.appendChild(gp);
       const acts = el('div', 'acts');
       if (!busy[a.aen]) {
@@ -225,8 +227,31 @@
     row('Found', w.found || (g.kind === 'note' ? g.text : g.kind === 'error' ? g.text : ''));
     if (!g.why && g.kind !== 'note') row('Note', 'This report was prepared before explanations were recorded; generate it again to see why.');
     if (g.placements && me.role === 'admin') { const b = el('button', 'btn-line', 'Open Placements'); b.onclick = () => { $('why').close(); show('vPlace'); }; box.appendChild(b); }
+    // what this panel is showing is what was read when the report was made, not the sheet as it stands now
+    row('As read', asRead(a));
+    const foot = el('div', 'why-foot');
+    foot.appendChild(el('div', 'small', 'Sheet corrected since? Press Generate again.'));
+    const acts = el('div', 'why-acts'), said = el('div', 'small');
+    if (canGenerate() && g.section) {
+      const rc = el('button', 'btn-line', 'Re-check');
+      rc.onclick = async () => { rc.disabled = true; said.className = 'small'; said.textContent = 'Re-reading the source…';
+        try {
+          const v = await call('recheck', { aen: a.aen, date: today.date, section: g.section });
+          said.className = 'small ' + (v.fixed ? 'ok' : '');
+          said.textContent = v.fixed
+            ? 'Fixed now: found a filled block for ' + dmy(v.dataDate) + ' — press Generate again'
+            : 'Still the same: ' + (v.found || v.error || (v.dataDate ? 'newest entry dated ' + dmy(v.dataDate) : 'nothing newer')) + ' (re-read at ' + v.at.slice(11) + ')';
+        } catch (e) { said.className = 'small err'; said.textContent = e.message; }
+        rc.disabled = false; };
+      acts.appendChild(rc);
+    }
+    if (canGenerate()) { const gen = el('button', 'btn', 'Generate again'); gen.onclick = () => { $('why').close(); runQueue([a.aen]); }; acts.appendChild(gen); }
+    foot.append(acts, said); box.appendChild(foot);
     $('why').showModal();
   }
+  /** "as read at 11:26" — when the report this panel came from was made (spec §16 item 11). */
+  const asRead = a => 'as read at ' + ((a.latest && a.latest.at) || '—');
+  const canGenerate = () => me && (me.role === 'admin' || me.role === 'operator');
   $('whyClose').onclick = () => $('why').close();
   // Every click makes a fresh report from the latest data, for all ten offices.
   $('genAll').onclick = () => runQueue(today.aens.map(a => a.aen));
@@ -330,11 +355,21 @@
   /** Column repairs the program made on its own (spec §16): Keep stores the new name (note stops); Undo makes it a gap again. */
   function drawRepairs(rep) {
     const box = $('dRepairs'); box.innerHTML = '';
-    const tabs = Object.keys(rep).filter(t => (rep[t].list || []).length);
+    const tabs = Object.keys(rep).filter(t => (rep[t].list || []).length || (rep[t].dates || []).length);
     if (!tabs.length) { box.appendChild(el('p', 'empty', 'No column changes — every heading was read as known.')); return; }
     tabs.forEach(t => {
       box.appendChild(el('b', '', rep[t].tab + (rep[t].at ? ' · ' + rep[t].at : '')));
-      rep[t].list.forEach(r => {
+      // a block date the rows decided (§16 item 10): read afresh every time, so there is nothing to keep or undo
+      (rep[t].dates || []).forEach(d => {
+        const row = el('div', 'repair-row');
+        row.appendChild(el('span', '', d.why === 'assumed'
+          ? 'two blocks headed ' + dmy(d.was) + ', no date in the rows — the upper one taken as ' + dmy(d.now)
+          : 'heading read ' + dmy(d.was) + ', rows dated ' + dmy(d.now).slice(0, 5) + ' — taken as ' + dmy(d.now).slice(0, 5)
+            + (d.of ? ' (' + d.agree + ' of ' + d.of + ' rows)' : '')));
+        row.appendChild(el('span', 'repair-acts small', 'read afresh each time'));
+        box.appendChild(row);
+      });
+      (rep[t].list || []).forEach(r => {
         const row = el('div', 'repair-row');
         row.appendChild(el('span', '', '"' + r.from + '" → "' + r.to + '"' + (r.via && r.via !== 'alt' ? ' (by ' + r.via + ')' : '')));
         const acts = el('span', 'repair-acts');

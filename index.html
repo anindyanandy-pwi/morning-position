@@ -176,6 +176,23 @@
     </div>
 
     <!-- admin: data and checks -->
+    <div id="vSources" hidden>
+      <div class="page-head"><div><h1 class="h2" style="font-size:30px">Sources</h1><p>Every sheet and report the program reads, in the order of the report. Nothing on this page writes to any sheet.</p></div></div>
+      <div class="block">
+        <div class="label">The sheets</div>
+        <div id="sSheets" class="small"></div>
+      </div>
+      <div class="block">
+        <div class="label">Every source</div>
+        <p class="small">Open goes straight to the tab. Newest data found is what the latest reports read there — green: current; amber: one day behind; red: older, none or not read. State opens the same explanation as the tile, with Re-check on it.</p>
+        <div class="table-box" id="sTable"></div>
+      </div>
+      <div class="block">
+        <div class="label">Source by AEN</div>
+        <p class="small">The date each AEN's latest report found in each source.</p>
+        <div class="table-box" id="dSources"></div>
+      </div>
+    </div>
     <div id="vData" hidden>
       <div class="page-head"><div><h1 class="h2" style="font-size:30px">Data and checks</h1><p>What came in, and rows that need a look.</p></div></div>
       <div class="block">
@@ -185,11 +202,6 @@
       <div class="block">
         <div class="label">Received from the TMS reader</div>
         <div class="table-box"><table class="t" style="min-width:600px"><thead><tr><th>Received</th><th>What</th><th>For date</th><th>Rows</th></tr></thead><tbody id="dUploads"></tbody></table></div>
-      </div>
-      <div class="block">
-        <div class="label">Sources the latest reports read</div>
-        <p class="small">The date each AEN's latest report found in each source. Green: current; amber: one day behind; red: older, none or not read. A date opens its tab; TMS sources show the reader's upload time.</p>
-        <div class="table-box" id="dSources"></div>
       </div>
       <div class="block">
         <div class="label">Column headings repaired</div>

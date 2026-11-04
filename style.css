@@ -165,3 +165,18 @@ td.src-c.green{background:#e8f2e6;color:var(--ok)} td.src-c.amber{background:#fd
 .why-foot .small{color:var(--muted);line-height:1.5}
 .why-foot .small.ok{color:var(--ok)}
 .why-foot .small.err{color:var(--bad)}
+
+/* the Sources tab (spec §17): every source in report order, each linked to its own tab */
+.sheet-row{display:flex;gap:12px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--rule-soft)}
+.sheet-row span:first-child{min-width:230px}
+.src-list th{white-space:nowrap}
+.src-list td{vertical-align:top}
+.src-list .part-row td{background:var(--ground);font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding-top:9px;padding-bottom:5px}
+.src-sec{white-space:nowrap}
+.src-state{white-space:nowrap}
+.src-state .btn-text{margin-left:10px}
+.state-ok{color:var(--ok)}
+.state-stale,.state-repaired{color:var(--warn)}
+.state-error,.state-missing,.state-unread{color:var(--bad)}
+.src-list .small.ok{color:var(--ok)}
+.src-list .small.err{color:var(--bad)}

@@ -80,10 +80,10 @@
 
   /* ---------- after sign-in ---------- */
   const ROLE = { admin: 'Administrator', operator: 'Engg/CNL', aen: '' };
-  const VIEWS = ['vToday', 'vAen', 'vReports', 'vUsers', 'vSettings', 'vPlace', 'vData'];
-  const MENU = { admin: [['vToday', 'Today'], ['vReports', 'Reports'], ['vUsers', 'Users'], ['vSettings', 'Settings'], ['vPlace', 'Placements'], ['vData', 'Data and checks']],
-                 operator: [['vToday', 'Today'], ['vReports', 'Reports']] };
-  const LOAD = { vToday: () => loadToday(), vAen: () => loadAen(), vReports: () => loadReports(), vUsers: () => loadAdmin(), vSettings: () => loadAdmin(), vPlace: () => loadPlacements(), vData: () => loadAdmin() };
+  const VIEWS = ['vToday', 'vAen', 'vReports', 'vUsers', 'vSettings', 'vPlace', 'vData', 'vSources'];
+  const MENU = { admin: [['vToday', 'Today'], ['vReports', 'Reports'], ['vUsers', 'Users'], ['vSettings', 'Settings'], ['vPlace', 'Placements'], ['vSources', 'Sources'], ['vData', 'Data and checks']],
+                 operator: [['vToday', 'Today'], ['vReports', 'Reports'], ['vSources', 'Sources']] };
+  const LOAD = { vToday: () => loadToday(), vAen: () => loadAen(), vReports: () => loadReports(), vUsers: () => loadAdmin(), vSettings: () => loadAdmin(), vPlace: () => loadPlacements(), vData: () => loadAdmin(), vSources: () => loadSources() };
 
   async function start() {
     try { me = await call('me'); } catch (e) { if (session) signedOut(e.message); return; }
@@ -388,6 +388,86 @@
    * Sources down, the ten AENs across: the date each AEN's latest report found in each source (spec §13). Green: current by
    * the section's own rule; amber: one day older than that; red: older, none or unreadable. Each cell links to the tab.
    */
+  /* ---------- Sources (spec §17): every source, linked, read-only ---------- */
+  const STATE = { ok: 'OK', stale: 'Older data', repaired: 'Repaired', error: 'Error', missing: 'Tab not found', unread: 'Not read yet' };
+  let sources = null;
+  async function loadSources() {
+    const box = $('sTable');
+    if (!sources || sources.date !== D) { box.innerHTML = ''; box.appendChild(el('p', 'empty', 'Reading the list of tabs…')); }
+    try { sources = await call('sources', { date: D }); } catch (e) { box.innerHTML = ''; box.appendChild(el('p', 'empty', e.message)); return; }
+    drawSheets(sources); drawSourceRows(sources);
+    try { const st = await call('adminState'); drawSourcesTable(st.sourcesTable || {}); } catch (e) { /* the per-AEN table is extra */ }
+  }
+  function drawSheets(v) {
+    const box = $('sSheets'); box.innerHTML = '';
+    v.sheets.forEach(sh => {
+      const row = el('div', 'sheet-row');
+      row.appendChild(el('span', '', sh.name));
+      if (sh.url) { const a = el('a', '', 'Open sheet ↗'); a.href = sh.url; a.target = '_blank'; a.rel = 'noopener'; row.appendChild(a); }
+      if (sh.error) row.appendChild(el('span', 'small err', sh.error));
+      box.appendChild(row);
+    });
+    if (v.account) box.appendChild(el('p', 'small', 'All of them are read with ' + v.account + ', and only read.'));
+  }
+  function drawSourceRows(v) {
+    const box = $('sTable'); box.innerHTML = '';
+    const tb = el('table', 't src-list'), thead = el('thead'), hd = el('tr');
+    ['Report section', 'Source', 'Open', 'Newest data found', 'Last read', 'State'].forEach(h => hd.appendChild(el('th', '', h)));
+    thead.appendChild(hd); tb.appendChild(thead);
+    const body = el('tbody');
+    let part = null;
+    v.rows.forEach(r => {
+      if (r.no !== part) { part = r.no; const sep = el('tr', 'part-row'); const td = el('td', '', r.no + '  ' + r.part);
+        td.colSpan = 6; sep.appendChild(td); body.appendChild(sep); }
+      const tr = el('tr');
+      tr.appendChild(el('td', 'src-sec', r.name + (r.aen ? ' · ' + r.aen : '')));
+      const nm = el('td', 'src-name'); nm.appendChild(document.createTextNode(r.source));
+      if (r.renamed) nm.appendChild(el('div', 'small', 'renamed since the spec; read under this name'));
+      if (r.menu) nm.appendChild(el('div', 'small', r.menu));
+      tr.appendChild(nm);
+      const op = el('td');
+      if (r.url) { const a = el('a', '', 'Open ↗'); a.href = r.url; a.target = '_blank'; a.rel = 'noopener'; op.appendChild(a); }
+      else op.appendChild(el('span', 'small', r.tms || r.tmsc ? 'read by the TMS reader' : '—'));
+      tr.appendChild(op);
+      const dt = el('td', 'src-c ' + dateClass(r, v.date));
+      dt.appendChild(el('span', '', r.date ? dmy(r.date) : (r.read ? 'none' : '—')));
+      if (!r.sameEverywhere) { const u = el('div', 'small');
+        u.textContent = r.perAen.map(x => x.aen + ' ' + (x.date ? dmy(x.date).slice(0, 5) : '—')).join(' · '); dt.appendChild(u); }
+      tr.appendChild(dt);
+      tr.appendChild(el('td', 'src-c', r.lastRead ? String(r.lastRead).slice(11, 16) : '—'));
+      const st = el('td', 'src-state');
+      const b = el('button', 'why-link state-' + r.state, STATE[r.state] || r.state);
+      b.onclick = () => openSourceWhy(r);
+      st.appendChild(b);
+      if (r.repairs || r.dateMoves) st.appendChild(el('div', 'small', [r.repairs ? r.repairs + ' heading' : '', r.dateMoves ? 'block date from the rows' : ''].filter(Boolean).join(' · ')));
+      const said = el('div', 'small');
+      const rc = el('button', 'btn-text', 'Re-check');
+      rc.onclick = async () => { rc.disabled = true; said.className = 'small'; said.textContent = 'Re-reading…';
+        try { const x = await call('recheck', { aen: r.whyAen || me.offices[0].aen, date: D, section: r.section });
+          said.className = 'small ' + (x.fixed ? 'ok' : '');
+          said.textContent = x.fixed ? 'Fixed now: ' + dmy(x.dataDate) + ' — press Generate again'
+            : 'Still the same' + (x.dataDate ? ': newest ' + dmy(x.dataDate) : '') + ' (' + x.at.slice(11) + ')';
+        } catch (e) { said.className = 'small err'; said.textContent = e.message; }
+        rc.disabled = false; };
+      st.append(rc, said);
+      tr.appendChild(st);
+      body.appendChild(tr);
+    });
+    tb.appendChild(body); box.appendChild(tb);
+  }
+  const dateClass = (r, D) => r.state === 'error' || r.state === 'missing' || !r.date ? 'red'
+    : r.date >= addDays(D, -1) ? 'green' : r.date >= addDays(D, -2) ? 'amber' : 'red';
+  /** The same explanation the tile shows, opened from a source row. */
+  async function openSourceWhy(r) {
+    if (!r.whyAen || !r.whySnapshot) { tell('No saved report has read this source yet — generate one first.', 'err'); return; }
+    try {
+      const j = await call('snapshot', { aen: r.whyAen, name: r.whySnapshot });
+      const sec = (j.report.sections || {})[r.section] || {};
+      const g = { section: r.section, kind: sec.ok ? 'stale' : 'error',
+        text: sec.ok ? 'latest available data used' : sec.error, why: (sec.why || {}).gap || null };
+      openWhy({ aen: r.whyAen, latest: { at: r.whySnapshot.slice(11, 13) + ':' + r.whySnapshot.slice(13, 15) } }, g);
+    } catch (e) { tell(e.message, 'err'); }
+  }
   function drawSourcesTable(st) {
     const box = $('dSources'); box.innerHTML = '';
     const aens = me.offices.map(o => o.aen).filter(a => st[a]);

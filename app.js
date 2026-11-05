@@ -135,9 +135,20 @@
   }
   async function download(aen, name, btn) {
     if (btn) btn.disabled = true;
-    try { const s = await call('snapshot', { aen, name }); await saveDocx(s.report); }
-    catch (e) { tell(e.message, 'err'); }
+    // §20 item 3: a failure is shown where the button is, not only in a passing message
+    const host = btn && btn.parentNode;
+    let note = host ? host.querySelector('.dl-err') : null;
+    if (note) note.remove();
+    let s = null;
+    try { s = await call('snapshot', { aen, name }); }
+    catch (e) { fail('Could not fetch the saved report: ' + e.message); if (btn) btn.disabled = false; return; }
+    try { await saveDocx(s.report); }
+    catch (e) { console.error(e); fail('Could not build the Word file: ' + (e && e.message || e)); }
     if (btn) btn.disabled = false;
+    function fail(text) {
+      tell(text, 'err');
+      if (host) { note = el('div', 'small err dl-err', text); host.appendChild(note); }
+    }
   }
 
   /* ---------- today (Engg/CNL and admin) ---------- */
@@ -267,7 +278,7 @@
           const v = await call('recheck', { aen: a.aen, date: today.date, section: g.section });
           said.className = 'small ' + (v.fixed ? 'ok' : '');
           said.textContent = v.fixed
-            ? 'Fixed now: found a filled block for ' + dmy(v.dataDate) + ' — press Generate again'
+            ? 'Fixed now: found a filled block for ' + dmy(v.dataDate) + ' — the Sources tab shows it; Generate again to put it in the report'
             : 'Still the same: ' + (v.found || v.error || (v.dataDate ? 'newest entry dated ' + dmy(v.dataDate) : 'nothing newer')) + ' (re-read at ' + v.at.slice(11) + ')';
         } catch (e) { said.className = 'small err'; said.textContent = e.message; }
         rc.disabled = false; };
@@ -302,7 +313,7 @@
     if (batch) {
       try {
         preparing = true; drawToday();
-        const p = await call('prepare', { date: D });
+        const p = await prepareParts(D);
         preparing = false;
         if (stopping) { list.forEach(a => delete busy[a]); endRun(); drawToday(); return; }   // Stop pressed while reading
         if (p.stopped) { list.forEach(a => delete busy[a]); endRun(); tell(p.message || 'Reading the sources was stopped — Generate again', 'err'); drawToday(); return; }
@@ -321,8 +332,22 @@
     };
     const todo = list.slice();
     const worker = async () => { while (todo.length && !stopping) await one(todo.shift()); };
-    await Promise.all([worker(), worker(), worker()]);   // three offices at a time
+    await Promise.all(Array.from({ length: batchId ? 5 : 3 }, worker));   // five offices at a time from the store
     endRun(); drawToday();
+  }
+  /**
+   * Read the shared sources in four parts side by side (spec §19): meeting/IOW/TMS, PIR tabs, PWI tabs, work plans.
+   * The work plans go first and alone: a server that knows parts answers with part 'plans' in a few seconds, and
+   * the other three then start together under the same id; an older server ignores the part, reads everything
+   * once and answers with its own id, which is used as it is.
+   */
+  async function prepareParts(D) {
+    const id = D + '_' + Math.random().toString(36).slice(2, 10).replace(/[^a-z0-9]/g, 'x').padEnd(8, 'x');
+    const first = await call('prepare', { date: D, part: 'plans', batchId: id });
+    if (first.stopped || first.part !== 'plans') return first;              // older server: a whole read already done
+    const rest = await Promise.all(['meeting', 'pir', 'pwi'].map(part => call('prepare', { date: D, part, batchId: id })));
+    const bad = rest.find(r => r.stopped);
+    return bad || { batchId: id, date: D };
   }
 
   /* ---------- ruled list of saved reports ---------- */
@@ -498,18 +523,23 @@
       tr.appendChild(dt);
       tr.appendChild(el('td', 'src-c', r.lastRead ? String(r.lastRead).slice(11, 16) : '—'));
       const st = el('td', 'src-state');
-      const label = (r.state === 'olderData' && r.date) ? STATE.olderData + ' — ' + dmy(r.date).slice(0, 5) : (STATE[r.state] || r.state);
+      const label = sourceStateLabel(r);
       const b = el('button', 'why-link state-' + r.state, label);
       b.onclick = () => openSourceWhy(r);
       st.appendChild(b);
+      // §21 item 2: a red row says what Google said, not only "Can't read"
+      if (r.state === 'cantRead' && r.error) st.appendChild(el('div', 'small err', r.error));
       if (r.repairs || r.dateMoves) st.appendChild(el('div', 'small', [r.repairs ? r.repairs + ' heading' : '', r.dateMoves ? 'block date from the rows' : ''].filter(Boolean).join(' · ')));
       const said = el('div', 'small');
       const rc = el('button', 'btn-text', 'Re-check');
       rc.onclick = async () => { rc.disabled = true; said.className = 'small'; said.textContent = 'Re-reading…';
         try { const x = await call('recheck', { aen: r.whyAen || me.offices[0].aen, date: D, section: r.section });
           said.className = 'small ' + (x.fixed ? 'ok' : '');
-          said.textContent = x.fixed ? 'Fixed now' + (x.dataDate ? ': ' + dmy(x.dataDate) : '') + ' — press Generate again'
-            : 'Still the same' + (x.dataDate ? ': newest ' + dmy(x.dataDate) : '') + (x.at ? ' (' + String(x.at).slice(11) + ')' : '');
+          said.className = 'small ' + (x.fixed ? 'ok' : 'err');
+          said.textContent = x.fixed ? 'Fixed now' + (x.dataDate ? ': ' + dmy(x.dataDate) : '')
+            : 'Still the same' + (x.error ? ': ' + x.error : x.dataDate ? ': newest ' + dmy(x.dataDate) : '') + (x.at ? ' (' + String(x.at).slice(11) + ')' : '');
+          // §21 item 3: the server has already put the new read in place of the old one; redraw the rows from it
+          if (x.fixed) setTimeout(() => { if (sources && sources.date === D) loadSources(); }, 1200);
         } catch (e) { said.className = 'small err'; said.textContent = e.message; }
         rc.disabled = false; };
       st.append(rc, said);
@@ -517,6 +547,13 @@
       body.appendChild(tr);
     });
     tb.appendChild(body); box.appendChild(tb);
+  }
+  /** "Older for BWN, KWAE — 02.11" when only some AENs are behind; "Older data — 02.11" when all are (§21 item 4). */
+  function sourceStateLabel(r) {
+    if (r.state !== 'olderData') return STATE[r.state] || r.state;
+    const d = r.behindDate || r.date, when = d ? ' — ' + dmy(d).slice(0, 5) : '';
+    const few = r.behind && r.behind.length && r.perAen && r.behind.length < r.perAen.length;
+    return (few ? 'Older for ' + r.behind.join(', ') : STATE.olderData) + when;
   }
   const dateClass = r => ({ current: 'green', repaired: 'green', olderData: 'amber', readerNotRun: 'amber',
     cantRead: 'red', nothingForAen: 'neutral', notGenerated: 'grey' }[r.state] || 'grey');

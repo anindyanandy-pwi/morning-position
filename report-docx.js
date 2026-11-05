@@ -77,7 +77,12 @@
     const C = AlignmentType.CENTER, L = AlignmentType.LEFT, RT = AlignmentType.RIGHT;
     const b = { style: BorderStyle.SINGLE, size: 6, color: '000000' }, nb = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
     const ALL = { top: b, bottom: b, left: b, right: b }, NONE = { top: nb, bottom: nb, left: nb, right: nb };
-    const S = R.sections, D = R.date;
+    // §20: a saved report of any age; the fields every page uses are filled in when an old one lacks them
+    R = Object.assign({}, R);
+    if (!R.period || !R.period.day || !R.period.night) { const d1 = new Date(R.date + 'T00:00:00Z'); d1.setUTCDate(d1.getUTCDate() - 1);
+      const p = isNaN(d1) ? R.date : d1.toISOString().slice(0, 10); R.period = { day: p, night: p + '/' + R.date }; }
+    if (!Array.isArray(R.units)) R.units = [];
+    const S = R.sections || {}, D = R.date;
 
     // The whole report is composed at a given density (cell padding, space above headings); see the end of the file.
     const compose = DZ => {
@@ -201,20 +206,22 @@
 
       /* ---------- abstract ---------- */
       const ok = k => S[k] && S[k].ok;
-      const tdcN = ok('tdcLapse') ? S.tdcLapse.rows.length : null;
-      const excN = ok('miniControl') ? S.miniControl.rows.length + (ok('pwiMc') ? S.pwiMc.rows.length : 0) : null;
-      const failN = ok('major') && ok('minor') ? S.major.rows.length + S.minor.rows.length : null;
+      const len = a => Array.isArray(a) ? a.length : 0;
+      const tdcN = ok('tdcLapse') ? len(S.tdcLapse.rows) : null;
+      const excN = ok('miniControl') ? len(S.miniControl.rows) + (ok('pwiMc') ? len(S.pwiMc.rows) : 0) : null;
+      const failN = ok('major') && ok('minor') ? len(S.major.rows) + len(S.minor.rows) : null;
       const blk = ok('blocks') ? S.blocks : null, mc = ok('machines') ? S.machines : null;
       const nilOr = n => n === null ? '–' : (n === 0 ? 'Nil' : String(n));
       // † on a figure that comes from older data (the previous day's entry not yet in the sheet)
       const old = k => ok(k) && !!S[k].stale;
+      const safeV = f => { try { return f(); } catch (e) { return '–'; } };   // §20: one odd field cannot stop the top sheet
       const abstractCells = [
-        ['Caution past TDC', nilOr(tdcN), old('tdcLapse')], ['Mini control exceptions', nilOr(excN), old('miniControl') || old('pwiMc')],
-        ['Failures (' + dm(ok('major') ? S.major.dataDate : R.period.day) + ')', nilOr(failN), old('major') || old('minor')],
-        ['LCs with bad road', ok('badRoad') && S.badRoad.row ? val(S.badRoad.row.total) : '–', old('badRoad')],
-        ['Blocks availed', blk ? blk.rows.length + ' (' + blk.rows.reduce((a, r) => a + (r.availed || 0), 0) + ' min)' : '–', !!blk && (blk.dayStale || blk.nightStale)],
-        ['Blocks not availed', blk && blk.notAvailedDay !== null ? blk.notAvailedDay + ' (month: ' + blk.notAvailedMonth + ')' : '–', !!blk && !!blk.notAvailedStale],
-        ['M/C block utilisation', mc ? pct(mc.total.util) : '–', !!mc && !!mc.nightStale], ['M/C days lost', mc ? String(mc.lost.length) : '–', false]]
+        ['Caution past TDC', safeV(() => nilOr(tdcN)), old('tdcLapse')], ['Mini control exceptions', safeV(() => nilOr(excN)), old('miniControl') || old('pwiMc')],
+        ['Failures (' + safeV(() => dm(ok('major') ? S.major.dataDate : R.period.day)) + ')', safeV(() => nilOr(failN)), old('major') || old('minor')],
+        ['LCs with bad road', safeV(() => ok('badRoad') && S.badRoad.row ? val(S.badRoad.row.total) : '–'), old('badRoad')],
+        ['Blocks availed', safeV(() => blk ? blk.rows.length + ' (' + blk.rows.reduce((a, r) => a + (r.availed || 0), 0) + ' min)' : '–'), !!blk && !!(blk.dayStale || blk.nightStale)],
+        ['Blocks not availed', safeV(() => blk && blk.notAvailedDay !== null && blk.notAvailedDay !== undefined ? blk.notAvailedDay + ' (month: ' + blk.notAvailedMonth + ')' : '–'), !!blk && !!blk.notAvailedStale],
+        ['M/C block utilisation', safeV(() => mc ? pct(mc.total.util) : '–'), !!mc && !!mc.nightStale], ['M/C days lost', safeV(() => mc ? String(mc.lost.length) : '–'), false]]
         .map(([k, v, o]) => [k, o && v !== '–' ? v + ' †' : v, o]);
       const anyOld = abstractCells.some(c => c[2]);
       const aw = fit(Array(8).fill(1), W);
@@ -240,7 +247,38 @@
       // every item of the list is in every report; a section whose source is not connected yet says so in one line
       const PENDING = what => NOTE([['To be added: ', { bold: true, size: 18 }], [what + '.', { italics: true, size: 18 }]]);
 
+      /* §20: every section is built inside guard(). A report saved under an older layout (or any data the builder
+         does not expect) cannot stop the file: the section falls back to one line saying so and its data as saved. */
+      const LV = R.layoutVersion || 1;
+      const flatV = v => v === null || v === undefined || v === '' ? '–' : typeof v === 'object' ? (Array.isArray(v) ? v.length + ' item' + (v.length === 1 ? '' : 's') : '…') : String(v).slice(0, 400);
+      const prim = v => v === null || v === undefined || typeof v !== 'object';
+      const savedParts = (label, s, depth) => {
+        const out = [], kv = [];
+        if (prim(s)) return [KV([[label, flatV(s)]])];
+        Object.keys(s).forEach(f => {
+          const v = s[f];
+          if (f === 'why' || f === 'ok' || f === 'imgs') return;
+          if (Array.isArray(v) && v.length && v[0] && typeof v[0] === 'object' && !Array.isArray(v[0])) {
+            const cols = Object.keys(v[0]).filter(c => v.slice(0, 20).every(r => !r || prim(r[c]))).slice(0, 6);
+            if (cols.length) { out.push(SUB(label + ' · ' + f), T(cols.map((c, i) => ({ h: c, free: i === cols.length - 1 })), v.slice(0, 80).map(r => cols.map(c => flatV((r || {})[c]))), { size: 16, hsize: 16 })); return; }
+          }
+          if (!prim(v) && !Array.isArray(v) && depth < 2) { out.push(...savedParts(label + ' · ' + f, v, depth + 1)); return; }
+          kv.push([f, flatV(v)]);
+        });
+        return (kv.length ? [SUB(label), KV(kv)] : []).concat(out);
+      };
+      const FAILED = [];
+      const guard = (no, title, keys, fn) => {
+        const n0 = SECS.length;
+        try { fn(); return; } catch (e) { SECS.length = n0; FAILED.push({ no, error: (e && e.message) || String(e) }); }
+        const line = NOTE([['This section was laid out differently when this report was made (' + dmy(D) + ') — shown as saved.', { italics: true, size: 18 }]]);
+        const o = no === '6–7' ? { secs: [6, 7] } : {};
+        try { add(head(no, title), [line, ...keys.filter(k => S[k]).flatMap(k => savedParts(k, S[k], 0))], o); }
+        catch (e2) { SECS.length = n0; add(head(no, title), [line], o); }
+      };
+
       /* 1. mini control exceptions: AEN items (tab 46), PWI items (tab 47), IOW items (spec §14 item 1) */
+      guard(1, "Mini control exceptions", ["miniControl", "pwiMc", "iowMc"], () => {
       {
         const parts = [], mcL = (k, label) => {
           const m = S[k];
@@ -266,7 +304,9 @@
           T([{ h: 'Item' }, { h: 'Details of exception', free: true }], iw.rows.map(r => [r.item, r.detail])));
         add(head(1, 'Mini control exceptions', ok('miniControl') ? 'position of ' + dmy(mc.dataDate) : null, ok('miniControl') && mc.stale ? notYet(dmy(R.period.day)) : null), parts);
       }
+      });
       /* 2. winter patrolling (GPS) */
+      guard(2, "Winter patrolling", ["gps"], () => {
       {
         const gOn = ok('gps') && S.gps.started && S.gps.row, parts = [];
         if (!ok('gps')) parts.push(ERRP(S.gps));
@@ -275,7 +315,9 @@
           ...g2.kinds.map(k => [k.name, val(k.n)]), ...(g2.action ? [['Action taken by AEN', g2.action]] : [])])); }
         add(head(2, 'Winter patrolling', 'night of ' + (gOn ? nightOf(addDays(S.gps.dataDate, -1), S.gps.dataDate) : wantNight), gOn && S.gps.stale ? notYet('night ' + wantNight) : null), parts);
       }
+      });
       /* 3. failures */
+      guard(3, "Failures", ["major", "minor", "pir"], () => {
       {
         const fd = ['major', 'minor'].filter(ok).map(k => S[k]), parts = [];
         const fail = (label, s, cols) => {
@@ -308,7 +350,9 @@
           parts.push(NOTE([['PIR tab' + (S.pir.problems.length > 1 ? 's' : '') + ' not read: ', { bold: true, size: 16 }], [S.pir.problems.join('; '), { italics: true, size: 16 }]], { before: 20 }));
         add(head(3, pirs.length ? 'Failures and PIRs' : 'Failures', fd.length ? 'reported on ' + [...new Set(fd.map(x => dmy(x.dataDate)))].join(' / ') : null, fd.some(x => x.stale) ? notYet(dmy(R.period.day)) : null), parts);
       }
+      });
       /* 4. cautions */
+      guard(4, "Cautions in the section and TDC overdue", ["tdcLapse", "pqrsTdc", "protection"], () => {
       {
         const cN = [ok('tdcLapse') ? 'TDC lapse ' + dmy(S.tdcLapse.dataDate) : null, ok('pqrsTdc') ? 'PQRS TDC fail as listed' : null,
           ok('protection') ? 'protection caution night of ' + nightOf(S.protection.nightOf, S.protection.dataDate) : null].filter(Boolean);
@@ -333,7 +377,9 @@
         if (!any && ok('tdcLapse') && ok('pqrsTdc') && ok('protection')) parts.push(NOTE([['Nil']]));
         add(head(4, 'Cautions in the section and TDC overdue', cN.join(' · '), cLate.length ? notYet(cLate.join(', ')) : null), parts);
       }
+      });
       /* 5. bad road */
+      guard(5, "Bad road surface at LC gates", ["badRoad"], () => {
       {
         const parts = [];
         if (!ok('badRoad')) parts.push(ERRP(S.badRoad));
@@ -341,7 +387,9 @@
           [[r.total, r.d15, r.d20, r.tdc]])); }
         add(head(5, 'Bad road surface at LC gates', ok('badRoad') && S.badRoad.dataDate ? 'as on ' + dmy(S.badRoad.dataDate) : null, ok('badRoad') && S.badRoad.stale ? notYet('as on ' + dmy(R.period.day)) : null), parts);
       }
+      });
       /* 6. NI LC inspection, 7. CCTV — tabs 42 and 37 list only the AENs with NI LC gates; for the others one line */
+      guard("6–7", "NI LC inspection and CCTV recording check", ["niLc", "cctv"], () => {
       if (!S.niLc && !S.cctv) add({ no: '6–7', line: 'Sections 6 and 7 not applicable: no NI LC gates under AEN/' + R.aen + '.' }, [], { secs: [6, 7] });
       else {
         const p6 = [];
@@ -363,8 +411,10 @@
             ...(c.zeroRemark ? [['Remarks against zero figure', c.zeroRemark]] : [])])); }
         add(head(7, 'CCTV recording check', ok('cctv') ? 'data of ' + dmy(S.cctv.dataDate) : null, ok('cctv') && S.cctv.stale ? notYet(dmy(R.period.day)) : null), p7);
       }
+      });
       const unitOf = u => String(u || '').replace(/^\s*(A?DEN|SSE|JE)\s*\/\s*(P\.?\s*W(AY)?\s*\/\s*)?/i, '').replace(/\s*\(/, ' (');
       /* 8. spot attention due — open spot attention cards by priority per SSE/P.Way unit, TMS summary as on the day (§6) */
+      guard(8, "Spot attention due", ["spot"], () => {
       {
         const sa = S.spot, parts = [];
         if (!sa || !sa.ok) parts.push(ERRP(sa || { error: 'not read' }));
@@ -376,7 +426,9 @@
         }
         add(head(8, 'Spot attention due', sa && sa.ok ? 'open cards as on ' + dmy(sa.dataDate) : null, sa && sa.ok && sa.stale ? 'TMS reading of ' + dmy(D) + ' not yet sent' : null), parts);
       }
+      });
       /* 9. work planned: the plan for the report day itself, from the AEN's tab of the work plan sheet */
+      guard(9, "Work planned for the next day", ["workPlan"], () => {
       if (S.workPlan) {
         const wp = S.workPlan, parts = [];
         if (!wp.ok) parts.push(ERRP(wp));
@@ -399,8 +451,10 @@
         add(head(9, 'Work planned for the next day', wpSub), parts,
           { wide: !!(wp.ok && wp.entered && wp.rows.length) });     // ten columns need the full width; long locations and stations wrap
       }
+      });
       /* 10. inspections due — TMS plans inspections by month: what is planned for this month and not yet done, per SSE and
          JE (and the AEN's own), with any planned in earlier months and still not done (§6, option a) */
+      guard(10, "Inspections due", ["inspPlan"], () => {
       {
         const ip = S.inspPlan, parts = [];
         const MON = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -420,7 +474,9 @@
         add(head(10, 'Inspections due', ip && ip.ok ? 'planned for ' + mName + ' in TMS, as on ' + dmy(ip.dataDate) : null, ip && ip.ok && ip.stale ? 'TMS reading of ' + dmy(D) + ' not yet sent' : null), parts,
           { wide: !!(ip && ip.ok && ip.designations.length) });     // asset lists need the full width
       }
+      });
       /* 11. KPI items */
+      guard(11, "KPI items", ["kpi"], () => {
       {
         const parts = [];
         if (!ok('kpi')) parts.push(ERRP(S.kpi));
@@ -444,7 +500,9 @@
         }
         add(head(11, 'KPI items', ok('kpi') && S.kpi.generatedAt ? 'from TMS Control, ' + dmy(S.kpi.generatedAt.slice(0, 10)) + ' ' + S.kpi.generatedAt.slice(11, 16) : 'from TMS Control'), parts);
       }
+      });
       /* 12. blocks */
+      guard(12, "Blocks availed and output", ["blocks"], () => {
       {
         const bLate = ok('blocks') ? [S.blocks.dayStale ? 'day ' + dmy(R.period.day) : null, S.blocks.nightStale ? 'night ' + wantNight : null].filter(Boolean) : [];
         const parts = [];
@@ -460,7 +518,9 @@
         add(head(12, 'Blocks availed and output', ok('blocks') ? 'day of ' + dmy(S.blocks.dayDate) + ' and night of ' + nightOf(addDays(S.blocks.nightDate, -1), S.blocks.nightDate)
           : 'day of ' + dmy(R.period.day) + ' and night of ' + wantNight, bLate.length ? notYet(bLate.join(', ')) : null), parts);
       }
+      });
       /* 13. machines */
+      guard(13, "Machine utilisation", ["machines"], () => {
       {
         const parts = [];
         if (!ok('machines')) parts.push(ERRP(S.machines));
@@ -479,9 +539,11 @@
         add(head(13, 'Machine utilisation', (ok('machines') && S.machines.nightDate ? 'night of ' + nightOf(S.machines.nightOf, S.machines.nightDate) + '; ' : '') + 'block from meeting sheet, effective time from TMS',
           ok('machines') && S.machines.nightStale ? notYet('night ' + wantNight) : null), parts);
       }
+      });
       /* 14. TMS dashboard: read by the TMS reader early on the report day, the position up to the previous day.
          Not one long table: the items are grouped by subject, each group its own table, laid out by the engine like any
          other section (two groups side by side when they fit). The heading stands above them at full width. */
+      guard(14, "TMS dashboard", ["tms"], () => {
       {
         const h14 = head(14, 'TMS dashboard', ok('tms') ? 'position on the morning of ' + dmy(S.tms.curDate) + (S.tms.prevDate ? ', against the morning of ' + dmy(S.tms.prevDate) : '') : null,
           ok('tms') && S.tms.stale ? 'the TMS reader has not sent the reading of ' + dmy(D) : null);
@@ -515,7 +577,9 @@
           });
         }
       }
+      });
       /* 15. worksite entry in TMS — the TMS Work Site report of the day of D-1: each worksite with its five yes/no checks (§6) */
+      guard(15, "Worksite entry in TMS", ["tmsWorksites"], () => {
       {
         const ws = S.tmsWorksites, parts = [];
         if (!ws || !ws.ok) parts.push(ERRP(ws || { error: 'not read' }));
@@ -529,9 +593,11 @@
         }
         add(head(15, 'Worksite entry in TMS', ws && ws.ok ? 'worksites of ' + dmy(ws.dataDate) : null), parts);
       }
+      });
       /* 16. worksite safety arrangement — PWI unit-wise: the union of the TMS worksites of D-1 (section 15), "PWI at Work
          Site" (day) and "PWI at Block Site" (night), each worksite once (spec §15); IOW unit-wise from the IOW work-site
          protection log, placed by station (§7) */
+      guard(16, "Worksite safety arrangement", ["pwiSites", "iowSites"], () => {
       {
         const pw = S.pwiSites, iw = S.iowSites, parts = [], dates = [], late = [];
         const unitName = u => String(u).replace(/^\s*(SSE|JE)\s*\/\s*P\.?\s*W(ay)?\s*\/\s*/i, '');
@@ -574,9 +640,12 @@
         const ds = [...new Set(dates)];
         add(head(16, 'Worksite safety arrangement', ds.length ? 'work of ' + ds.map(dmy).join(' / ') : null, late.length ? notYet(late.join(', ')) : null), parts);
       }
+      });
       /* 17. weekly position — Saturdays only; paused until its format is decided */
+      guard(17, "Weekly position", [], () => {
       if (new Date(D + 'T00:00:00Z').getUTCDay() === 6)
         add(head(17, 'Weekly position'), [NOTE([['Paused: ', { bold: true, size: 18 }], ['the Saturday weekly position is to be designed.', { italics: true, size: 18 }]])]);
+      });
 
       /* ======================= the layout engine =======================
          1. Width class from the content: a section is narrow when its widest natural line (a heading or a cell, unwrapped)

@@ -29,7 +29,7 @@
     const lastM = mOf(per('lastPeriod')) !== null ? mOf(per('lastPeriod')) : (thisM + 11) % 12;
     const of = (v, max) => v === null || v === undefined ? '–' : v + ' of ' + (max || 82);
     const groupOf = x => {                                 // "(BHR)51B" -> BHR; "P&C (BSBR)54A" -> BSBR; else the type (LC, LWR) or first code
-      const s0 = typeof x === 'string' ? x : x.asset, t = typeof x === 'string' ? '' : (x.type || '');
+      const s0 = typeof x === 'string' ? x : String((x && (x.asset ?? x.where ?? x.name ?? x.text)) ?? ''), t = typeof x === 'string' ? '' : String((x && x.type) || '');
       let m = s0.match(/^\(([^)]+)\)\s*(.*)$/); if (m) return [m[1], m[2] || s0];
       m = s0.match(/\(([A-Z]{2,5})\)/); if (m) return [m[1], s0];
       if (t) return [t, s0];

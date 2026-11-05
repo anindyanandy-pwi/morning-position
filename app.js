@@ -9,14 +9,27 @@
   let session = store.get('amp_session'), me = null;
 
   /* ---------- server ---------- */
+  const GIVE_UP_MS = 390000;   // 6 min 30 s: the website stops waiting for an answer (spec §19 item 3)
   async function call(fn, args) {
-    let r;
+    let r; const t0 = Date.now();
+    const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(function () { ctrl.abort(); }, GIVE_UP_MS) : null;
     try {
       r = await fetch(C.API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ session, fn, args: args || {} }) });
-    } catch (e) { throw new Error('The server could not be reached. Check the internet connection and try again.'); }
+        body: JSON.stringify({ session, fn, args: args || {} }), signal: ctrl ? ctrl.signal : undefined });
+    } catch (e) {
+      if (timer) clearTimeout(timer);
+      // Tell a timeout apart from a real network failure (spec §19 item 6): Google kills a web-app call at
+      // 6 minutes by dropping the connection, which looks like a network error — the time taken gives it away.
+      if (ctrl && e && e.name === 'AbortError') throw new Error('The server took more than 6½ minutes and did not answer — Generate again.');
+      if (Date.now() - t0 > 330000) throw new Error('The server took more than 6 minutes and was stopped — Generate again.');
+      throw new Error('The server could not be reached. Check the internet connection and try again.');
+    }
+    if (timer) clearTimeout(timer);
     if (!r.ok) throw new Error('The server did not answer (' + r.status + ').');
-    const j = await r.json();
+    let j;
+    // a 200 whose body is not JSON is Google's 6-minute kill page, not a reachability problem (spec §19 item 6)
+    try { j = await r.json(); } catch (e) { throw new Error('The server took more than 6 minutes and was stopped — Generate again.'); }
     if (!j.ok) {
       if (/sign in again|Please sign in|no longer registered|expired\. Please/.test(j.error || '') && fn !== 'otpVerify') signedOut(j.error);
       throw new Error(j.error || 'Server error');
@@ -130,6 +143,7 @@
   let D = null, today = null;
   const busy = {};          // aen -> 'run' | 'queue'
   const failed = {};        // aen -> message
+  let stopping = false, preparing = false, runCount = 0;   // §19: Stop button and the honest counter
   $('tPick').onchange = () => { if ($('tPick').value) { D = $('tPick').value; loadToday(); } };
 
   // The ten tiles and the Generate buttons are ready at once; nothing waits for the server.
@@ -192,11 +206,24 @@
     });
     const left = today.aens.length - ready - gap;
     $('cReady').textContent = two(ready); $('cGap').textContent = two(gap); $('cLeft').textContent = two(left);
-    const running = today.aens.filter(a => busy[a.aen] === 'run').map(a => 'AEN/' + a.aen).join(', ');
-    const queued = Object.keys(busy).length;
-    $('tProgress').textContent = running ? running + ' IN HAND · ' + queued + ' LEFT' : (left ? left + ' TO GO' : 'ALL READY');
-    $('genAll').textContent = queued ? 'Generating… ' + (today.aens.length - queued) + ' of ' + today.aens.length : 'Generate all ten';
-    $('genAll').disabled = queued > 0;
+    // honest counter (spec §19 item 7): done / running / waiting, not "started of ten"
+    const running = today.aens.filter(a => busy[a.aen] === 'run').length;
+    const waiting = today.aens.filter(a => busy[a.aen] === 'queue').length;
+    const done = Math.max(0, runCount - running - waiting);
+    const ga = $('genAll');
+    if (preparing) {
+      $('tProgress').textContent = 'READING EVERY SOURCE ONCE…';
+      ga.textContent = 'Reading sources…'; ga.disabled = false;
+    } else if (stopping) {
+      $('tProgress').textContent = 'STOPPING · ' + running + ' STILL RUNNING';
+      ga.textContent = 'Stopping… (' + running + ' still running)'; ga.disabled = running === 0;
+    } else if (running + waiting > 0) {
+      $('tProgress').textContent = 'GENERATING · ' + done + ' DONE · ' + running + ' RUNNING · ' + waiting + ' WAITING';
+      ga.textContent = 'Stop'; ga.disabled = false;
+    } else {
+      $('tProgress').textContent = left ? left + ' TO GO' : 'ALL READY';
+      ga.textContent = 'Generate all ten'; ga.disabled = false;
+    }
     drawSources(today.sources);
   }
   function drawSources(s) {
@@ -253,26 +280,48 @@
   const asRead = a => 'as read at ' + ((a.latest && a.latest.at) || '—');
   const canGenerate = () => me && (me.role === 'admin' || me.role === 'operator');
   $('whyClose').onclick = () => $('why').close();
-  // Every click makes a fresh report from the latest data, for all ten offices.
-  $('genAll').onclick = () => runQueue(today.aens.map(a => a.aen));
-  function runQueue(list) { return runQueue_(list).catch(e => { tell(e.message, 'err'); console.error(e); }); }
-  async function runQueue_(list) {
+  // "Generate all ten" reads every source once (the batch store, §19) and then builds the ten from it.
+  // While it runs the same button is Stop. A single tile's Generate / Generate again reads fresh (no batch).
+  $('genAll').onclick = () => { if (Object.keys(busy).length || preparing) stopAll(); else runQueue(today.aens.map(a => a.aen), true); };
+  function stopAll() {
+    stopping = true;                                     // start no more offices
+    Object.keys(busy).forEach(a => { if (busy[a] === 'queue') delete busy[a]; });   // waiting ones go back to "Not prepared yet"
+    drawToday();                                         // offices already running finish on their own
+  }
+  function runQueue(list, batch) { return runQueue_(list, batch).catch(e => { preparing = false; tell(e.message, 'err'); console.error(e); }); }
+  async function runQueue_(list, batch) {
     tell('');
     list = list.filter(a => !busy[a]);
+    if (!list.length) return;
+    stopping = false; runCount = list.length;
     list.forEach(a => { busy[a] = 'queue'; delete failed[a]; });
     drawToday();
+    const endRun = () => { stopping = false; preparing = false; runCount = 0; };
+    let batchId = null;
+    if (batch) {
+      try {
+        preparing = true; drawToday();
+        const p = await call('prepare', { date: D });
+        preparing = false;
+        if (stopping) { list.forEach(a => delete busy[a]); endRun(); drawToday(); return; }   // Stop pressed while reading
+        if (p.stopped) { list.forEach(a => delete busy[a]); endRun(); tell(p.message || 'Reading the sources was stopped — Generate again', 'err'); drawToday(); return; }
+        batchId = p.batchId;
+      } catch (e) { list.forEach(a => delete busy[a]); endRun(); drawToday(); tell(e.message, 'err'); return; }
+    }
     const one = async aen => {
+      if (stopping) { delete busy[aen]; drawToday(); return; }
       busy[aen] = 'run'; drawToday();
       try {
-        const j = await call('generate', { date: D, aen });
-        const a = today.aens.find(x => x.aen === aen);
-        if (a) { a.latest = j.info; a.count = (a.count || 0) + 1; fresh[aen] = true; }
+        const j = await call('generate', batchId ? { date: D, aen, batch: batchId } : { date: D, aen });
+        if (j.stopped) { failed[aen] = j.step || 'stopped at 5 minutes'; }   // §19: a self-stopped build shows as failed on the tile
+        else { const a = today.aens.find(x => x.aen === aen); if (a) { a.latest = j.info; a.count = (a.count || 0) + 1; fresh[aen] = true; } }
       } catch (e) { failed[aen] = e.message; }
       delete busy[aen]; drawToday();
     };
     const todo = list.slice();
-    const worker = async () => { while (todo.length) await one(todo.shift()); };
+    const worker = async () => { while (todo.length && !stopping) await one(todo.shift()); };
     await Promise.all([worker(), worker(), worker()]);   // three offices at a time
+    endRun(); drawToday();
   }
 
   /* ---------- ruled list of saved reports ---------- */

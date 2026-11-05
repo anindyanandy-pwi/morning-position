@@ -127,7 +127,8 @@
     for (const k of ['frame', 'seal', 'rule', 'contents']) { try { coverArt[k] = new Uint8Array(await (await fetch('cover-' + k + '.png')).arrayBuffer()); } catch (e) { coverArt[k] = null; } } }
     return coverArt; };
   async function saveDocx(R) {
-    const blob = await docx.Packer.toBlob(buildMorningDoc(docx, R, { logo: await getLogo(), cover: await getCover() }));
+    // made safe for Word 2007 (docx-compat.js): the offices' Word 2007 refused the file otherwise (05.11.2026)
+    const blob = await word2007Safe(JSZip, await docx.Packer.toBlob(buildMorningDoc(docx, R, { logo: await getLogo(), cover: await getCover() })), 'blob');
     const a = el('a'); a.href = URL.createObjectURL(blob);
     a.download = 'Morning_Position_AEN-' + R.aen.replace('/', '-') + '_' + dmy(R.date) + '.docx';
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 30000);

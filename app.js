@@ -333,6 +333,9 @@
     const todo = list.slice();
     const worker = async () => { while (todo.length && !stopping) await one(todo.shift()); };
     await Promise.all(Array.from({ length: batchId ? 5 : 3 }, worker));   // five offices at a time from the store
+    // the offices wrote only their own files; the shared lists (index, Sources, repairs, admin notes) are brought
+    // up to date once, here — also after Stop. An older server has no finish: nothing to do then.
+    if (batchId) { try { await call('finish', { date: D }); } catch (e) { console.warn('finish: ' + e.message); } }
     endRun(); drawToday();
   }
   /**

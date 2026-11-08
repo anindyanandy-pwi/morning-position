@@ -802,6 +802,9 @@
         const r = new TableRow({ cantSplit: true, children: [cA, cG, cB] }); r._h = Math.max(cA._h, cB._h); r._cant = true;
         const t = new Table({ width: { size: W, type: WidthType.DXA }, columnWidths: [COL, W - 2 * COL, COL], layout: TableLayoutType.FIXED, rows: [r] });
         t._rows = [r]; t._h = r._h; t._secs = rw.s.flatMap(x => x.secs);
+        // §25.1 (08.11 r4) stash the two columns' element lists so the display can split this side-by-side wrapper
+        // between rows of its nested tables (the reader can't cut a 1-row wrapper otherwise). Keeps the download untouched.
+        t._pair = { cols: [rw.s[0].half, rw.s[1].half], colW: COL, gutW: W - 2 * COL };
         return [para('', { exact: 40, keepNext: true }), t];
       };
       const nightTxt = 'Work of ' + dmy(R.period.day) + ' (day) and night of ' + R.period.night.split('/').map(d => d.slice(8, 10)).join('/') + '.' + D.slice(5, 7) + '.' + D.slice(0, 4);
@@ -943,6 +946,43 @@
         });
         return pieces.length ? pieces : [tb];
       };
+      // §25.1 (08.11 r4) split a side-by-side wrapper (t._pair) between the rows of its nested tables. pairCuts.pair
+      // is, per content column, the body-row indices where each continuation piece starts; both columns break on the
+      // same pages so they stay aligned. Each piece repeats the nested header; the cell's heading/notes above the
+      // table show only on the first piece, trailing notes only on the last. Display only — the download is untouched.
+      const splitWrapper = (tb, pairCuts) => {
+        const P = tb._pair, lists = pairCuts.pair;
+        const colParts = P.cols.map((els, ci) => {
+          const ti = els.findIndex(e => e._rows);
+          const tbl = ti >= 0 ? els[ti] : null;
+          return { pre: ti >= 0 ? els.slice(0, ti) : els, tbl: tbl, post: ti >= 0 ? els.slice(ti + 1) : [], cuts: lists[ci] || [] };
+        });
+        const nP = Math.max.apply(null, colParts.map(cp => cp.cuts.length)) + 1;
+        const outerW = tb._w || (P.colW * P.cols.length + P.gutW * (P.cols.length - 1));
+        const pc = (els, w) => new TableCell({ width: { size: w, type: WidthType.DXA }, borders: NONE, margins: { top: 0, bottom: 0, left: 0, right: 0 }, verticalAlign: VerticalAlign.TOP, children: els.length ? els : [para('')] });
+        const pieces = [];
+        for (let k = 0; k < nP; k++) {
+          const rowCells = [];
+          colParts.forEach((cp, ci) => {
+            if (ci) rowCells.push(pc([para('')], P.gutW));            // the gutter between the two columns
+            const content = [];
+            if (!cp.tbl) { if (k === 0) content.push.apply(content, cp.pre); rowCells.push(pc(content, P.colW)); return; }
+            const heads = cp.tbl._rows.filter(r => r._head), body = cp.tbl._rows.filter(r => !r._head);
+            // a column whose cut list is shorter than this piece index has already placed all its rows on an earlier
+            // piece — it is EMPTY here (cp.cuts[k-1] is undefined → start at body.length → empty slice), never repeated.
+            const s = k === 0 ? 0 : (cp.cuts[k - 1] !== undefined ? cp.cuts[k - 1] : body.length);
+            const e = cp.cuts[k] !== undefined ? cp.cuts[k] : body.length;
+            const slice = s < e ? body.slice(s, e) : [];
+            const widths = cp.tbl._widths || (cp.tbl.options && cp.tbl.options.columnWidths), w = cp.tbl._w || (widths ? widths.reduce((a, b) => a + b, 0) : P.colW);
+            if (k === 0) content.push.apply(content, cp.pre);
+            if (slice.length) content.push(new Table({ width: { size: w, type: WidthType.DXA }, columnWidths: widths, layout: TableLayoutType.FIXED, rows: [...heads, ...slice] }));
+            if (k === nP - 1) content.push.apply(content, cp.post);
+            rowCells.push(pc(content, P.colW));
+          });
+          pieces.push(new Table({ width: { size: outerW, type: WidthType.DXA }, columnWidths: [P.colW, P.gutW, P.colW], layout: TableLayoutType.FIXED, rows: [new TableRow({ cantSplit: true, children: rowCells })] }));
+        }
+        return pieces;
+      };
       // docx-preview shows a discrete page only per document SECTION (a pageBreakBefore is just invisible CSS on
       // screen). So buildDisplay returns the body as an array of pages (one element-array per Word page); the caller
       // emits each as its own section, and docx-preview then lays them out as separate pages, like Word.
@@ -962,7 +1002,8 @@
           flat.forEach((el, i) => {
             if (before.has(i)) newPage();
             const c = cuts[i];
-            if (el._rows && c && c.length) splitTable(el, c).forEach((piece, k) => { if (k) newPage(); put(piece); });
+            if (el._pair && c && c.pair) splitWrapper(el, c).forEach((piece, k) => { if (k) newPage(); put(piece); });
+            else if (el._rows && c && c.length) splitTable(el, c).forEach((piece, k) => { if (k) newPage(); put(piece); });
             else put(el);
           });
           // a section's break lives in its last paragraph; a page that ends in a table needs a trailing paragraph or
@@ -1010,7 +1051,13 @@
     // split tables at the right rows (block i here is block i in the rendered body).
     if (opts.displaySpec && opts.displaySpec.measure && opts.onDisplayMeta)
       opts.onDisplayMeta(displayPages[0].map(function (el) {
-        return { table: !!el._rows, rows: el._rows ? el._rows.length : 0, head: el._rows ? el._rows.filter(function (r) { return r._head; }).length : 0 };
+        var m = { table: !!el._rows, rows: el._rows ? el._rows.length : 0, head: el._rows ? el._rows.filter(function (r) { return r._head; }).length : 0 };
+        // a side-by-side wrapper: per content column, the nested tables' {rows, head} in DOM order, so the reader can
+        // measure the nested rows and work out where to cut each column to keep the two columns aligned.
+        if (el._pair) m.pair = el._pair.cols.map(function (col) {
+          return col.filter(function (e) { return e._rows; }).map(function (tb) { return { rows: tb._rows.length, head: tb._rows.filter(function (r) { return r._head; }).length }; });
+        });
+        return m;
       }));
     const layout = ['report ends ' + Math.round(best.end * 100) + '% down page ' + best.pages + ' (±' + Math.round(best.err * 100) + '%)',
       'pages ' + [...best.fills, Math.round(best.end * 100)].map(x => x + '%').join(' · '),

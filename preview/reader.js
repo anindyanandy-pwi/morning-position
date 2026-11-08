@@ -135,8 +135,58 @@
       let j = i, h = 0; const lim = i + 6;
       while (j < n && !isTable(j) && j < lim) { h += bh[j]; j++; }
       if (j >= n || !isTable(j)) return null;                 // no table follows → not a heading group
+      if (isWrapper(j)) {
+        // a side-by-side wrapper can split, so the heading only needs its nested header + 2 body rows beside it, not
+        // the whole wrapper (querySelectorAll('tr') would wrongly return the tall outer row first).
+        const cols = wrapCols(j);
+        if (cols) return h + Math.max.apply(null, cols.map(c => c.preH + c.headH + (c.rh[c.head] || 0) + (c.rh[c.head + 1] || 0)));
+        return h + Math.min(bh[j], avail * 0.5);
+      }
       const rh = rowsOf(j).map(r => r.getBoundingClientRect().height), hc = headN(j);
       return h + rh.slice(0, hc).reduce((a, b) => a + b, 0) + (rh[hc] || 0);
+    };
+
+    // a side-by-side wrapper: one outer row whose content cells each hold one nested table (meta.pair lists the
+    // columns' nested {rows, head}). Measure the nested rows so the wrapper can be split between them, both columns
+    // broken on the same page, each nested header repeated — the reader's way to cut the TMS dashboard and §ab pairs.
+    const isWrapper = i => isTable(i) && meta[i] && meta[i].rows === 1 && meta[i].pair && blocks[i].querySelectorAll('table').length > 0;
+    const wrapCols = i => {
+      const outerRow = blocks[i].querySelector(':scope > tbody > tr') || blocks[i].querySelector(':scope > tr');
+      if (!outerRow) return null;
+      const cells = [...outerRow.children].filter(td => td.querySelector('table'));   // content cells (gutter has none)
+      const pair = meta[i].pair; if (cells.length !== pair.length) return null;
+      const top = blocks[i].getBoundingClientRect().top, cols = [];
+      for (let c = 0; c < cells.length; c++) {
+        const inner = [...cells[c].querySelectorAll('table')].filter(t => !t.querySelector('table'));
+        if (inner.length !== 1 || !pair[c][0]) return null;         // only split a column with exactly one nested table
+        const tb = inner[0], trs = [...tb.querySelectorAll('tr')];
+        const head = Math.min(pair[c][0].head || 0, trs.length - 1);
+        const rh = trs.map(r => r.getBoundingClientRect().height);
+        cols.push({ head: head, body: trs.length - head, rh: rh, headH: rh.slice(0, head).reduce((a, b) => a + b, 0), preH: tb.getBoundingClientRect().top - top });
+      }
+      return cols;
+    };
+    // body rows of column c that fit in `budget`, starting at body-row `start`, with `pre` above the header (piece 1 only)
+    const fitRows = (c, budget, start, pre) => { let acc = pre + c.headH, k = start; for (; k < c.body; k++) { if (acc + c.rh[c.head + k] > budget && k > start) break; acc += c.rh[c.head + k]; } return k; };
+    const splitWrap = (i, used0) => {
+      const cols = wrapCols(i); if (!cols || !cols.every(c => c.body >= 4)) return null;   // need >=2 each side
+      if (cols.some(c => fitRows(c, avail - used0, 0, c.preH) < 2)) return null;            // no room on this page
+      const starts = cols.map(() => 0), lists = cols.map(() => []); let pg = 0, lastH = cols.map(() => 0);
+      while (starts.some((s, ci) => s < cols[ci].body)) {
+        if (++pg > 60) return null;
+        const budget = pg === 1 ? avail - used0 : avail;
+        cols.forEach((c, ci) => {
+          if (starts[ci] >= c.body) { lastH[ci] = 0; return; }
+          let k = fitRows(c, budget, starts[ci], pg === 1 ? c.preH : 0);
+          if (k < c.body && c.body - k < 2) k = c.body - 2;         // keep >=2 in the tail
+          if (k - starts[ci] < 2) k = Math.min(starts[ci] + 2, c.body);
+          let h = (pg === 1 ? c.preH : 0) + c.headH; for (let r = starts[ci]; r < k; r++) h += c.rh[c.head + r];
+          lastH[ci] = k > starts[ci] ? h : 0;
+          if (k < c.body) lists[ci].push(k);
+          starts[ci] = k;
+        });
+      }
+      return { lists: lists, usedAfter: Math.max.apply(null, lastH) };
     };
 
     const before = new Set(), cuts = {};
@@ -147,24 +197,37 @@
         if (need != null && used + need > avail) { before.add(i); used = 0; }
       }
       if (used + bh[i] <= avail) { used += bh[i]; continue; }   // fits on this page
-      // a table that does not fit the space left is split between rows (its header repeated), to fill the page as Word
-      // does — but only when at least three body rows can stay above the break and three remain below, so no stray
-      // row is left; otherwise the whole table moves to a fresh page.
-      // only a plain table splits: its rendered row count must match the builder's (a wrapper table with nested
-      // tables — e.g. the TMS dashboard — has a different count, so its rows can't be cut; it moves whole).
+      // a table that does not fit the space left is split between rows (its header repeated) to fill the page as Word
+      // does, keeping >=2 body rows on each page so no stray single row is left. A plain table (rendered row count ==
+      // the builder's, no nested tables) splits here; a side-by-side wrapper is split further below.
       if (isTable(i) && meta[i] && rowsOf(i).length === meta[i].rows && blocks[i].querySelectorAll('table').length === 0) {
         const rows = rowsOf(i), rh = rows.map(r => r.getBoundingClientRect().height), hc = Math.min(headN(i), rows.length - 1);
         const headH = rh.slice(0, hc).reduce((a, b) => a + b, 0), body = rows.length - hc;
-        // how many body rows fit in the space left on this page (after the header)
-        let fitHere = 0, acc = used + headH; for (let r = hc; r < rows.length; r++) { if (acc + rh[r] > avail) break; acc += rh[r]; fitHere++; }
-        if (body >= 6 && fitHere >= 3 && body - fitHere >= 3) {
-          const list = []; let seg = used + headH, bodyInSeg = 0;
+        if (body >= 4) {
+          // fill the page with body rows (header repeated on each page), each page kept to >=2 body rows; a stray
+          // last row is avoided by borrowing one back from the previous page, so no page gets a single row.
+          const segs = [[]]; let seg = used + headH;
           for (let r = hc; r < rows.length; r++) {
-            if (seg + rh[r] <= avail || bodyInSeg < 1) { seg += rh[r]; bodyInSeg++; continue; }
-            list.push(r); seg = headH + rh[r]; bodyInSeg = 1;            // new page: header repeated + this row
+            const cur = segs[segs.length - 1];
+            if (seg + rh[r] > avail && cur.length >= 2) { segs.push([]); seg = headH; }
+            segs[segs.length - 1].push(r); seg += rh[r];
           }
-          if (list.length) { cuts[i] = list; used = seg; continue; }
+          while (segs.length > 1 && segs[segs.length - 1].length < 2 && segs[segs.length - 2].length > 2) {
+            const moved = segs[segs.length - 2].pop(); segs[segs.length - 1].unshift(moved);
+          }
+          // split only when it fills this page (first segment >=2 rows) and leaves a clean tail (last segment >=2)
+          if (segs.length >= 2 && segs[0].length >= 2 && segs[segs.length - 1].length >= 2) {
+            cuts[i] = segs.slice(1).map(s => s[0]);                     // first row index of each continuation page
+            used = headH + segs[segs.length - 1].reduce((a, r) => a + rh[r], 0);
+            continue;
+          }
         }
+      }
+      // a side-by-side wrapper is split between its nested rows to fill the page (the TMS dashboard, §ab pairs)
+      if (isWrapper(i)) {
+        let res = splitWrap(i, used);                          // try to split filling the current page
+        if (!(res && res.lists.some(l => l.length)) && used > 0) { before.add(i); used = 0; res = splitWrap(i, 0); }
+        if (res && res.lists.some(l => l.length)) { cuts[i] = { pair: res.lists }; used = res.usedAfter; continue; }
       }
       if (used > 0) { before.add(i); used = 0; }               // move the whole block to a fresh page
       used += bh[i];

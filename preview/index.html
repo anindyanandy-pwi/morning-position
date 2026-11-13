@@ -1,1 +1,60 @@
-<!doctype html><meta charset="utf-8"><title>AEN Morning Position</title><meta http-equiv="refresh" content="0; url=../"><link rel="canonical" href="../"><script>location.replace('../')</script>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#6d1a24">
+<title>AEN Morning Position — preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif:ital,wght@0,500;0,600;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-180.png" sizes="any">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="vendor/fonts/fonts.css">
+<link rel="stylesheet" href="preview.css">
+<script src="config.js"></script>
+<script src="vendor/docx-9.8.1.iife.js"></script>
+<script src="vendor/jszip-3.10.1.min.js"></script>
+<script>window.__docxGen = window.docx;</script>
+<script src="vendor/docx-preview-0.3.5.min.js"></script>
+<script>window.docxPreview = window.docx; window.docx = window.__docxGen; delete window.__docxGen;</script>
+<script src="docx-compat.js"></script>
+<script src="report-docx.js"></script>
+<script src="docx-build.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="brand-ir">Eastern Railway</span><span class="brand-sub">Howrah Division · Morning Position</span></div>
+  <nav class="menu" id="menu"></nav>
+  <div class="top-right"><span class="who" id="whoami"></span><button class="btn-line sm" id="signout" data-press="1" hidden>Sign out</button></div>
+</header>
+
+<main id="login" class="login" hidden>
+  <div class="login-card">
+    <div class="login-h">Morning Position</div>
+    <div id="stepEmail">
+      <label class="lbl" for="loginEmail">Your railway email</label>
+      <input id="loginEmail" class="field" type="email" autocomplete="email" placeholder="name@gmail.com">
+      <button id="sendCode" class="btn" data-press="1">Send code</button>
+    </div>
+    <div id="stepCode" hidden>
+      <label class="lbl" for="loginCode">Enter the 6-digit code</label>
+      <input id="loginCode" class="field mono" inputmode="numeric" maxlength="6" placeholder="••••••">
+      <button id="verify" class="btn" data-press="1">Sign in</button>
+    </div>
+    <div id="msgLogin" class="msg"></div>
+    <div class="login-foot small">Opens on your phone or PC · <code>…/morning-position/aen</code></div>
+  </div>
+</main>
+
+<main id="app" class="app" hidden>
+  <div id="screen" class="screen"></div>
+</main>
+
+<script src="motion.js"></script>
+<script src="reader.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

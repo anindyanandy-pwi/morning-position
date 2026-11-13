@@ -546,6 +546,16 @@
         const ul = el('ul'); lines.forEach(l => ul.appendChild(el('li', '', l))); iss.appendChild(ul);
       }));
       if (!iss.querySelector('b')) iss.appendChild(el('p', 'empty', 'No placement or date issues to look at.'));
+      // §31.5: machine cross-check mismatches (TMS vs mail/sheet), one card, the newest day that has any. Empty = no card.
+      const mDays = Object.keys(s.issues || {}).sort().reverse();
+      let mDay = null, mLines = [];
+      for (const d of mDays) { const day = s.issues[d]; const dl = [];
+        Object.keys(day).sort().forEach(a => (day[a].machineMismatches || []).forEach(x => dl.push(
+          'AEN/' + a + ' · ' + x.machine + ' — TMS ' + (x.tms == null ? '—' : x.tms + ' min')
+          + (x.other == null ? '' : ' · ' + (x.source || 'other') + ' ' + x.other + ' min') + ' — ' + x.note)));
+        if (dl.length) { mDay = d; mLines = dl; break; } }
+      if (mLines.length) { iss.appendChild(el('b', '', 'Machines: TMS vs mail/sheet · ' + dmy(mDay)));
+        const mul = el('ul'); mLines.forEach(l => mul.appendChild(el('li', '', l))); iss.appendChild(mul); }
       drawSourcesTable(s.sourcesTable || {});
       drawRepairs(s.repairs || {});
       drawAuto(s.auto);

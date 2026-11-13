@@ -428,7 +428,10 @@
         const parts = [];
         if (!ok('badRoad')) parts.push(ERRP(S.badRoad));
         else { const r = S.badRoad.row; parts.push(T([{ h: 'Total LCs', a: 'c', one: true }, { h: 'Open > 15 days', a: 'c', one: true }, { h: 'Open > 20 days', a: 'c', one: true }, { h: 'TDC', a: 'c' }],
-          [[r.total, r.d15, r.d20, r.tdc]])); }
+          [[r.total, r.d15, r.d20, r.tdc]]));
+          // §31.1: the LC gate numbers, when the sheet carries them (km/line when written next to them). None found -> nothing, no note.
+          if (r.lcGates && r.lcGates.length) parts.push(NOTE([['LC gates: ', { bold: true, size: 17 }],
+            [r.lcGates.map(g => g.lc + (g.km ? ' (km ' + g.km + (g.line ? ', ' + g.line : '') + ')' : g.line ? ' (' + g.line + ')' : '')).join(', ') + '.', { size: 17 }]], { before: 20 })); }
         add(head(6, 'Bad road surface at LC gates', ok('badRoad') && S.badRoad.dataDate ? 'as on ' + dmy(S.badRoad.dataDate) : null, ok('badRoad') && S.badRoad.stale ? notYet('as on ' + dmy(R.period.day)) : null), parts);
       }
       });
@@ -509,9 +512,10 @@
         else {
           const rows = [];
           // this month only (user, 30.10.2026: the "overdue from earlier months" column is not shown)
-          ip.designations.forEach(g => g.features.filter(f => f.planned).forEach((f, i) => rows.push([i ? ' ' : unitOf(g.name), f.feature, f.planned + ' / ' + f.done, list(f.notDone)])));
+          // §31.3: the full TMS designation ("SSE/P.WAY/KWAE(ML)", "JE/PW/ML/KWAE"), not the short unit; the ADEN's own plan is included when the reader uploads it
+          ip.designations.forEach(g => g.features.filter(f => f.planned).forEach((f, i) => rows.push([i ? ' ' : (g.name || '').trim(), f.feature, f.planned + ' / ' + f.done, list(f.notDone)])));
           const open = ip.designations.reduce((a, g) => a + g.features.reduce((b, f) => b + f.notDone.length, 0), 0);
-          if (rows.length) parts.push(T([{ h: 'SSE / JE' }, { h: 'Feature' }, { h: 'Planned / done', a: 'c', one: true }, { h: 'Not yet done this month', free: true }], rows, { size: 17, hsize: 17 }));
+          if (rows.length) parts.push(T([{ h: 'Designation' }, { h: 'Feature' }, { h: 'Planned / done', a: 'c', one: true }, { h: 'Not yet done this month', free: true }], rows, { size: 17, hsize: 17 }));
           else parts.push(KV([['Inspections planned for ' + mName, 'none in TMS for this AEN']]));
           if (rows.length && !open) parts.push(NOTE([['All inspections planned for ' + mName + ' so far done.', { italics: true, size: 17 }]], { before: 20 }));
         }
@@ -555,9 +559,10 @@
         else if (S.blocks.fromMail) {
           // §27.2: the mail's full blocks for this AEN — section/line, granted/availed/burst and progress — with totals
           const b = S.blocks, rows = b.mailBlocks, t = b.totals || {};
-          parts.push(T([{ h: 'Sl.', a: 'c', one: true }, { h: 'Section / Line' }, { h: 'Nature of work', free: true }, { h: 'Granted (min)', a: 'c', one: true }, { h: 'Availed (min)', a: 'c', one: true }, { h: 'Burst (min)', a: 'c', one: true }, { h: 'Progress', free: true }],
-            rows.length ? rows.map((r, i) => [String(i + 1), (r.section || '') + (r.line ? ', ' + r.line : ''), r.work, val(r.grantedMin), val(r.availed), val(r.burst), r.progress]) : [[{ v: 'No block availed', span: 7, a: 'c' }]],
-            { size: 17, hsize: 17, foot: [[{ v: 'Total', span: 3, bold: true, a: 'r' }, ...[val(t.granted), val(t.availed), val(t.burst)].map(v => ({ v, bold: true, a: 'c' })), { v: naText(b) }]] }));
+          // §31.4: Demand column added; the totals foot carries Demanded/Granted/Availed/Burst and the Cancelled count
+          parts.push(T([{ h: 'Sl.', a: 'c', one: true }, { h: 'Section / Line' }, { h: 'Nature of work', free: true }, { h: 'Demand (min)', a: 'c', one: true }, { h: 'Granted (min)', a: 'c', one: true }, { h: 'Availed (min)', a: 'c', one: true }, { h: 'Burst (min)', a: 'c', one: true }, { h: 'Progress', free: true }],
+            rows.length ? rows.map((r, i) => [String(i + 1), (r.section || '') + (r.line ? ', ' + r.line : ''), r.work, val(r.demand), val(r.grantedMin), val(r.availed), val(r.burst), r.progress]) : [[{ v: 'No block availed', span: 8, a: 'c' }]],
+            { size: 17, hsize: 17, foot: [[{ v: 'Total', span: 3, bold: true, a: 'r' }, ...[val(t.demand), val(t.granted), val(t.availed), val(t.burst)].map(v => ({ v, bold: true, a: 'c' })), { v: 'Cancelled ' + val(t.cancelled) + '. ' + naText(b) }]] }));
           if (b.notAvailedBlocks && b.notAvailedBlocks.length)
             parts.push(NOTE([['Not availed: ', { bold: true, size: 17 }], [b.notAvailedBlocks.map(x => (x.section || '') + (x.line ? ' ' + x.line : '') + (x.reason ? ' — ' + x.reason : '')).join('; ') + '.', { italics: true, size: 17 }]], { before: 20 }));
         }
@@ -589,6 +594,16 @@
           parts.push(NOTE([['Machine-days lost: ', { bold: true, size: 18 }], [M.lost.length ? M.lost.map(l => l.machine + ' – ' + l.reason + (l.remark ? ' (' + l.remark + ')' : '')).join('; ') + '.' : 'Nil.', { size: 18 }]], { before: 50 }));
           if (M.rows.some(r => r.awaited)) parts.push(NOTE([['Note: ', { bold: true, size: 17 }], ['effective time awaited from TMS for machines not yet in its reading.', { italics: true, size: 17 }]], { before: 20 }));
         }
+        else if (S.machines.fromTms) {
+          // §31.5: TMS is the list and the figures; the mail/sheet cross-check shows as "[≠ …]" / "[not in TMS]" on the row
+          const M = S.machines, one = h => ({ h, a: 'c', one: true });
+          parts.push(T([one('Sl.'), one('Day / Night'), { h: 'Machine' }, { h: 'Location' }, one('Block (min)'), one('Eff. (min)'), one('Eff. %'), { h: 'Progress / cross-check', free: true }],
+            M.rows.length ? M.rows.map((r, i) => [String(i + 1), r.when || '–', r.machine, r.location, r.availed == null ? '–' : val(r.availed), r.effective == null ? '–' : val(r.effective), pct(r.effPct),
+              (r.progress || '') + (r.note ? (r.progress ? '  ' : '') + '[' + r.note + ']' : '')]) : [[{ v: 'No machine worked', span: 8, a: 'c' }]],
+            { size: 17, hsize: 17, foot: [[{ v: 'Total', span: 4, bold: true, a: 'r' }, { v: val(M.total.availed), bold: true, a: 'c' }, { v: val(M.total.effective), bold: true, a: 'c' }, { v: pct(M.total.effPct), bold: true, a: 'c' }, { v: '' }]] }));
+          parts.push(NOTE([['Machine-days lost: ', { bold: true, size: 18 }], [M.lost.length ? M.lost.map(l => l.machine + ' – ' + l.reason + (l.remark ? ' (' + l.remark + ')' : '')).join('; ') + '.' : 'Nil.', { size: 18 }]], { before: 50 }));
+          if (M.rows.some(r => r.note)) parts.push(NOTE([['Cross-check: ', { bold: true, size: 17 }], ['figures are TMS’s; "[≠ mail/sheet]" and "[not in TMS]" mark where the mail .xls or meeting sheet differs. The admin board lists all mismatches.', { italics: true, size: 17 }]], { before: 20 }));
+        }
         else {
           const M = S.machines, one = h => ({ h, a: 'c', one: true });
           parts.push(T([one('Sl.'), one('Day / Night'), { h: 'Machine' }, { h: 'Location' }, one('Corridor (min)'), one('Block availed (min)'), one('Block util.'), one('Eff. time (min)'), one('Eff. %'), { h: 'Progress', free: true }],
@@ -601,8 +616,10 @@
           if (M.rows.some(r => r.awaited)) notes.push('effective time for night blocks awaited from TMS');
           if (notes.length) parts.push(NOTE([['Note: ', { bold: true, size: 17 }], [notes.join('; ') + '.', { italics: true, size: 17 }]], { before: 20 }));
         }
-        const mNote = ok('machines') && S.machines.fromMail ? 'from the Engineering Control machine report, ' + S.machines.periodLabel
-          : (ok('machines') && S.machines.nightDate ? 'night of ' + nightOf(S.machines.nightOf, S.machines.nightDate) + '; ' : '') + 'block from meeting sheet, effective time from TMS';
+        const mNote = !ok('machines') ? null
+          : S.machines.fromTms ? 'machine list and figures from TMS; mail .xls and meeting sheet cross-checked'
+          : S.machines.fromMail ? 'from the Engineering Control machine report, ' + S.machines.periodLabel + (S.machines.tmsUnavailable ? ' (TMS not available for the date)' : '')
+          : (S.machines.nightDate ? 'night of ' + nightOf(S.machines.nightOf, S.machines.nightDate) + '; ' : '') + 'block from meeting sheet';
         add(head(14, 'Machine utilisation', mNote,
           ok('machines') && S.machines.fromMail ? mailLate(S.machines.older) : (ok('machines') && S.machines.nightStale ? notYet('night ' + wantNight) : null)), parts);
       }
@@ -937,7 +954,18 @@
         return [para('', { exact: 40, keepNext: true }), t];
       };
       const nightTxt = 'Work of ' + dmy(R.period.day) + ' (day) and night of ' + R.period.night.split('/').map(d => d.slice(8, 10)).join('/') + '.' + D.slice(5, 7) + '.' + D.slice(0, 4);
-      const head0 = [...letterhead('MORNING POSITION', nightTxt), abstract, ...abstractNote];
+      // §31.2 "Not done, and why" — a box at the very top of the report (after the cover abstract). Red heading;
+      // other departments' causes come first (server sorts). Nothing pending -> one line "All planned work done".
+      const notDoneBox = (() => {
+        const nd = S.notDone; if (!nd || nd.ok === false) return [];
+        const title = para([run('Not done, and why', { bold: true, size: 20, color: 'C00000' })], { before: 120 });
+        const entries = nd.entries || [];
+        if (!entries.length) return [title, para([run('All planned work done.', { italics: true, size: 18 })], { before: 20 })];
+        const nw = fit([3, 2, 2, 3, 2], W);
+        const rows = entries.map(e => Rw([e.work, e.location, e.planned, e.what + (e.causeText ? ' — ' + e.causeText : ''), e.cause], nw, ['l', 'l', 'l', 'l', 'l'], { size: 16 }));
+        return [title, table(nw, [H(['Work', 'Where', 'Planned', 'What happened', 'Cause'], nw, 16), ...rows])];
+      })();
+      const head0 = [...letterhead('MORNING POSITION', nightTxt), abstract, ...abstractNote, ...notDoneBox];
       const packed = pack([]);
       // the layouts tried: the best pairing, and each of its pairs undone (rule 3 then lays both at full width)
       const ARR = [{ name: 'best pairing', cost: 0, rows: packed },

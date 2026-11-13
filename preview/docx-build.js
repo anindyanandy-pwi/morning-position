@@ -35,5 +35,31 @@
     var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename;
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 30000);
   }
-  g.AMPDocx = { getLogo: getLogo, getCover: getCover, docxBlob: docxBlob, measureBlob: measureBlob, displayBlob: displayBlob, docxName: docxName, saveBlob: saveBlob };
+  // On-screen reader only (Word is untouched). docx-preview places a picture anchored to the PAGE (the cover frame)
+  // relative to the text area, so it lands one margin right and down, runs off the sheet and sits under the seal
+  // (classic root, 13.11). Seat any sheet-sized portrait picture on the sheet itself, behind the text; and re-apply
+  // the cover's tracked lettering, which docx-preview drops. Same rules as preview/reader.js seatCoverFrame.
+  function seatCover(root) {
+    var secs = root.querySelectorAll('section.docx');
+    for (var i = 0; i < secs.length; i++) {
+      var sec = secs[i], sr = sec.getBoundingClientRect(), ims = sec.querySelectorAll('img');
+      for (var j = 0; j < ims.length; j++) {
+        var im = ims[j], r = im.getBoundingClientRect();
+        if (!(im.naturalHeight > im.naturalWidth && r.width > sr.width * 0.8 && r.height > sr.height * 0.8)) continue;
+        if (getComputedStyle(sec).position === 'static') sec.style.position = 'relative';
+        sec.style.zIndex = '0';   // its own stacking layer: the frame (-1) sits above the white sheet, below the text
+        for (var w = im.parentElement; w && w !== sec; w = w.parentElement) if (getComputedStyle(w).position !== 'static') w.style.position = 'static';
+        im.style.position = 'absolute'; im.style.left = '0'; im.style.top = '0';
+        im.style.width = '100%'; im.style.height = '100%'; im.style.margin = '0'; im.style.zIndex = '-1';
+      }
+    }
+    var first = root.querySelector('section.docx'); if (!first) return;
+    var ps = first.querySelectorAll('p');
+    for (var n = 0; n < ps.length; n++) {
+      var t = (ps[n].textContent || '').trim();
+      if (/^EASTERN RAILWAY\b.*HOWRAH DIVISION$/.test(t)) ps[n].style.letterSpacing = '0.32em';
+      else if (/^AEN\/\S+\s+·\s+\S/.test(t) && t === t.toUpperCase()) ps[n].style.letterSpacing = '0.08em';
+    }
+  }
+  g.AMPDocx = { getLogo: getLogo, getCover: getCover, docxBlob: docxBlob, measureBlob: measureBlob, displayBlob: displayBlob, docxName: docxName, saveBlob: saveBlob, seatCover: seatCover };
 })(window);

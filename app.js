@@ -1,374 +1,821 @@
-/* §25 preview app. One site; the screen changes by role, enforced on the server. Talks to the live server through
- * AMP_CONFIG.API_URL. New routes (seen / reportMistake / mistakes / email) are feature-detected: where the live
- * server does not have them yet, the control says so instead of failing. */
+/* AEN Morning Position — website logic. */
 (function () {
+  const C = window.AMP_CONFIG || {};
   const $ = id => document.getElementById(id);
-  const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
-  const store = { get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} }, del: k => { try { localStorage.removeItem(k); } catch (e) {} } };
-  const dmy = iso => iso ? iso.split('-').reverse().join('.') : '—';
-  const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
-  const weekday = iso => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-IN', { weekday: 'short', timeZone: 'UTC' });
-  const town = o => String(o || '').replace(/^Assistant Divisional Engineer[\s,/]*/i, '').replace(/\s*\(.*\)\s*$/, '');
-  let me = null, missing = {};   // missing[fn]=true when the live server lacks a route
-  // section id -> number/title (for the Report-a-mistake picker and the gap labels). The report itself is the .docx.
-  window.SECTION_TITLES = {
-    miniControl: { no: 1, title: 'AEN mini control' }, pwiMc: { no: 1, title: 'PWI mini control' }, iowMc: { no: 1, title: 'IOW mini control' },
-    gps: { no: 2, title: 'Winter patrolling' }, major: { no: 3, title: 'Major failures' }, minor: { no: 3, title: 'Minor failures' }, pir: { no: 3, title: 'PIR / failures detail' },
-    tdcLapse: { no: 4, title: 'Caution past TDC' }, pqrsTdc: { no: 4, title: 'PQRS TDC fail' }, protection: { no: 4, title: 'Protection caution' },
-    badRoad: { no: 5, title: 'Bad road surface at LC gates' }, niLc: { no: 6, title: 'NI LC inspection' }, cctv: { no: 7, title: 'CCTV recording check' },
-    spot: { no: 8, title: 'Spot attention due' }, workPlan: { no: 9, title: 'Work planned (next day)' }, inspPlan: { no: 10, title: 'Inspections due' },
-    kpi: { no: 11, title: 'KPI and inspections' }, blocks: { no: 12, title: 'Blocks availed and output' }, machines: { no: 13, title: 'Machine utilisation' },
-    tms: { no: 14, title: 'TMS dashboard' }, tmsWorksites: { no: 15, title: 'Worksite entry in TMS' }, pwiSites: { no: 16, title: 'Worksite safety arrangement' }, iowSites: { no: 16, title: 'IOW worksite safety' }
-  };
-  const ST = window.SECTION_TITLES, secTitle = id => (ST[id] ? ST[id].title : id);
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const store = { get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } },
+                  set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} } };
 
+  let session = store.get('amp_session'), me = null;
+
+  /* ---------- server ---------- */
+  const GIVE_UP_MS = 390000;   // 6 min 30 s: the website stops waiting for an answer (spec §19 item 3)
   async function call(fn, args) {
-    const r = await fetch(AMP_CONFIG.API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ session: store.get('amp_sess') || '', fn, args: args || {} }) });
-    let j; try { j = await r.json(); } catch (e) { throw new Error('The server took too long — try again.'); }
-    if (!j.ok) { if (/unknown fn|not allowed|no such/i.test(j.error || '')) missing[fn] = true;
-      if (/sign in again|Please sign in|no longer registered|expired/i.test(j.error || '')) signedOut(); throw new Error(j.error || 'Server error'); }
+    let r; const t0 = Date.now();
+    const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(function () { ctrl.abort(); }, GIVE_UP_MS) : null;
+    try {
+      r = await fetch(C.API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ session, fn, args: args || {} }), signal: ctrl ? ctrl.signal : undefined });
+    } catch (e) {
+      if (timer) clearTimeout(timer);
+      // Tell a timeout apart from a real network failure (spec §19 item 6): Google kills a web-app call at
+      // 6 minutes by dropping the connection, which looks like a network error — the time taken gives it away.
+      if (ctrl && e && e.name === 'AbortError') throw new Error('The server took more than 6½ minutes and did not answer — Generate again.');
+      if (Date.now() - t0 > 330000) throw new Error('The server took more than 6 minutes and was stopped — Generate again.');
+      throw new Error('The server could not be reached. Check the internet connection and try again.');
+    }
+    if (timer) clearTimeout(timer);
+    if (!r.ok) throw new Error('The server did not answer (' + r.status + ').');
+    let j;
+    // a 200 whose body is not JSON is Google's 6-minute kill page, not a reachability problem (spec §19 item 6)
+    try { j = await r.json(); } catch (e) { throw new Error('The server took more than 6 minutes and was stopped — Generate again.'); }
+    if (!j.ok) {
+      if (/sign in again|Please sign in|no longer registered|expired\. Please/.test(j.error || '') && fn !== 'otpVerify') signedOut(j.error);
+      throw new Error(j.error || 'Server error');
+    }
     return j;
   }
-  function signedOut() { store.del('amp_sess'); me = null; clearCaches(); show('login'); }
+  const say = (node, text, kind) => { node.textContent = text || ''; node.className = 'msg' + (kind ? ' ' + kind : ''); };
+  const tell = (text, kind) => say($('msg'), text, kind);
 
-  /* ---------- shared report blob (same as Download) ---------- */
-  // one builder for both sites (web/docx-build.js): logo + cover artwork, Word-2007 safe
-  const docxBlob = R => AMPDocx.docxBlob(R);
-  const docxName = R => AMPDocx.docxName(R);
+  /* ---------- dates and names ---------- */
+  const dmy = iso => iso ? iso.split('-').reverse().join('.') : '\u2014';
+  const dotted = iso => iso.split('-').reverse().join('·');
+  const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const weekday = iso => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-IN', { weekday: 'long', timeZone: 'UTC' });
+  const town = office => String(office || '').replace(/^Assistant Divisional Engineer[\s,/]*/i, '').replace(/\s*\(.*\)\s*$/, '').replace(/^Track\/(.*)$/, '$1 (Track)');
+  const two = n => String(n).padStart(2, '0');
+  const SECTION = { miniControl: 'AEN mini control', pwiMc: 'PWI mini control', gps: 'Winter patrolling', major: 'Major failures', minor: 'Minor failures', tdcLapse: 'TDC lapse',
+    pqrsTdc: 'PQRS TDC fail', protection: 'Protection caution', badRoad: 'Bad road surface', cctv: 'CCTV', niLc: 'NI LC inspection', kpi: 'KPI and inspections',
+    blocks: 'Blocks', machines: 'Machines', tms: 'TMS items', file: 'Saved file' };
+  const gapText = g => (SECTION[g.section] || g.section) + ': ' + (g.kind === 'stale' ? 'older data used' : g.text);
+  // "why a gap" (spec §13): reason codes in plain words
+  const REASON = { 'not-entered': 'Not entered yet — the sheet is behind the date', 'date-form': 'Date written in an unusual form', 'tab-missing': 'Tab name not found',
+    'columns-changed': 'A column heading has changed', 'not-placed': 'Rows not placed under any AEN', 'reader-not-run': 'The TMS reader has not uploaded it yet',
+    'source-error': 'The source could not be read', 'column-repair': 'Column heading repaired',
+    'date-from-rows': 'Block date taken from the rows' };
 
-  /* ---------- views ---------- */
-  function show(name) { ['login', 'app'].forEach(n => $(n).hidden = n !== (name === 'login' ? 'login' : 'app')); }
+  /* ---------- sign-in ---------- */
+  const showStep = code => { $('stepEmail').hidden = code; $('stepCode').hidden = !code; (code ? $('loginCode') : $('loginEmail')).focus(); };
+  $('loginEmail').value = store.get('amp_email') || '';
+  async function sendCode() {
+    const email = $('loginEmail').value.trim();
+    if (!email) return say($('msgEmail'), 'Enter your email.', 'err');
+    $('sendCode').disabled = $('resend').disabled = true; say($('msgEmail'), 'Sending the code…'); say($('msgCode'), '');
+    try {
+      const j = await call('otpRequest', { email });
+      store.set('amp_email', email); $('sentTo').textContent = j.sentTo; $('loginCode').value = '';
+      say($('msgEmail'), ''); showStep(true); say($('msgCode'), 'Code sent.', 'ok');
+    } catch (e) { say($('stepCode').hidden ? $('msgEmail') : $('msgCode'), e.message, 'err'); }
+    $('sendCode').disabled = $('resend').disabled = false;
+  }
+  $('sendCode').onclick = sendCode;
+  $('resend').onclick = sendCode;
+  $('loginEmail').onkeydown = e => { if (e.key === 'Enter') sendCode(); };
+  $('changeEmail').onclick = () => { showStep(false); say($('msgCode'), ''); };
+  $('verifyCode').onclick = async () => {
+    $('verifyCode').disabled = true;
+    try {
+      const j = await call('otpVerify', { email: $('loginEmail').value.trim(), code: $('loginCode').value.trim() });
+      session = j.session; store.set('amp_session', session); await start();
+    } catch (e) { say($('msgCode'), e.message, 'err'); }
+    $('verifyCode').disabled = false;
+  };
+  $('loginCode').onkeydown = e => { if (e.key === 'Enter') $('verifyCode').click(); };
 
-  // switch-over day (§30): the old portal stored the session under 'amp_session'. Carry it over to the new key once,
-  // so nobody has to sign in again — the token is the same and the server accepts it. Then drop the old key.
-  function carryOverSession() {
-    try { if (!store.get('amp_sess')) { const old = localStorage.getItem('amp_session'); if (old) store.set('amp_sess', old); } } catch (e) {}   // 13.11: keep amp_session so /classic/ stays signed in
+  function signedOut(why) {
+    session = null; me = null; store.set('amp_session', null);
+    $('app').hidden = true; $('signin').hidden = false; showStep(false);
+    say($('msgEmail'), why || '', why ? 'err' : '');
   }
-  async function boot() {
-    MX.pressAll(document);
-    carryOverSession();
-    try { const j = await call('me'); me = j; store.set('amp_email', me.email || ''); afterSignIn(); }
-    catch (e) { show('login'); initLogin(); }
-    registerSW();
-  }
-  function afterSignIn() {
-    show('app');
-    $('whoami').textContent = (me.email || '') + ' · ' + (me.role === 'admin' ? 'Admin' : 'AEN/' + me.aen);
-    $('signout').hidden = false;
-    if (me.role === 'admin') adminBoard('today'); else aenHome();
-  }
+  $('signOut').onclick = () => { call('signOut').catch(() => {}); signedOut('Signed out.'); $('msgEmail').className = 'msg'; };
 
-  /* ================= AEN home (§25.2) ================= */
-  async function aenHome() {
-    const root = $('screen'); root.innerHTML = ''; root.className = 'screen aen';
-    $('menu').innerHTML = ''; $('menu').hidden = true;         // §25.2 fix: no admin nav for an AEN — no empty bar
-    const head = el('div', 'aen-head');
-    head.appendChild(el('div', 'aen-office', 'AEN/' + me.aen + (me.office ? ' · ' + town(me.office) : '')));
-    const strip = el('div', 'date-strip'); strip.id = 'dateStrip'; head.appendChild(strip);
-    root.appendChild(head);
-    const panel = el('div', 'aen-report'); panel.id = 'aenReport'; root.appendChild(panel);
-    panel.appendChild(skeletonReport());
-    const cached = await readLast();                 // §25.4: the last report this user opened, shown at once
-    if (cached && cached.date) openReader(cached, false, true);   // marked "loading newer…"; swapped below when fresh
-    let today, hist;
-    try { [today, hist] = await Promise.all([call('today'), call('history', { aen: me.aen }).catch(() => ({ snapshots: [] }))]); }
-    catch (e) { panel.innerHTML = ''; panel.appendChild(el('div', 'note err', e.message)); return; }
-    const mine = (today.aens || []).find(a => a.aen === me.aen) || {};
-    const auto = today.auto || {};
-    // date strip from history
-    const dates = [...new Set((hist.snapshots || []).map(s => s.date))].slice(0, 30);
-    buildDateStrip(strip, dates, today.date);
-    renderAenDay(panel, today.date, mine, auto, hist);
-  }
-  function buildDateStrip(strip, dates, active) {
-    strip.innerHTML = '';
-    if (!dates.includes(active)) dates.unshift(active);
-    dates.forEach(d => { const b = el('button', 'date-pill' + (d === active ? ' on' : '')); b.dataset.press = '1';
-      b.innerHTML = '<span class="dp-wd">' + weekday(d) + '</span><span class="dp-d">' + d.split('-').reverse().slice(0, 2).join('.') + '</span>';
-      b.onclick = () => openAenDate(d); strip.appendChild(b); });
-    MX.pressAll(strip);
-  }
-  async function renderAenDay(panel, date, mine, auto, hist) {
-    panel.innerHTML = '';
-    if (!mine.latest) {
-      const n = el('div', 'aen-wait');
-      n.appendChild(el('div', 'big', 'Not ready yet'));
-      n.appendChild(el('div', 'small', auto && auto.enabled && auto.next ? 'The next automatic check is at ' + auto.next + '.' : 'Ask the control room, or press Generate on a PC.'));
-      panel.appendChild(n); return;
+  /* ---------- after sign-in ---------- */
+  const ROLE = { admin: 'Administrator', operator: 'Engg/CNL', aen: '' };
+  const VIEWS = ['vToday', 'vAen', 'vReports', 'vUsers', 'vSettings', 'vPlace', 'vData', 'vSources'];
+  const MENU = { admin: [['vToday', 'Today'], ['vReports', 'Reports'], ['vUsers', 'Users'], ['vSettings', 'Settings'], ['vPlace', 'Placements'], ['vSources', 'Sources'], ['vData', 'Data and checks']],
+                 operator: [['vToday', 'Today'], ['vReports', 'Reports'], ['vSources', 'Sources']] };
+  const LOAD = { vToday: () => loadToday(), vAen: () => loadAen(), vReports: () => loadReports(), vUsers: () => loadAdmin(), vSettings: () => loadAdmin(), vPlace: () => loadPlacements(), vData: () => loadAdmin(), vSources: () => loadSources() };
+
+  async function start() {
+    try { me = await call('me'); } catch (e) { if (session) signedOut(e.message); return; }
+    $('signin').hidden = true; $('app').hidden = false;
+    $('who').textContent = (me.role === 'aen' ? 'AEN/' + me.aen : ROLE[me.role]) + ' · ' + me.email;
+    const items = MENU[me.role];
+    $('menu').hidden = !items; $('menuItems').innerHTML = '';
+    (items || []).forEach(([v, t]) => { const b = el('button', '', t); b.dataset.view = v; b.onclick = () => show(v); $('menuItems').appendChild(b); });
+    if (me.role !== 'aen') {
+      D = me.today; $('tPick').value = D;
+      $('rAen').innerHTML = ''; me.offices.forEach(o => { const op = el('option', '', 'AEN/' + o.aen + ' · ' + town(o.office)); op.value = o.aen; $('rAen').appendChild(op); });
     }
-    const bar = el('div', 'aen-bar');
-    const madeTxt = mine.latest.auto ? 'Made automatically ' + mine.latest.auto + autoCheckTail(auto) : 'Ready since ' + mine.latest.at;
-    bar.appendChild(el('div', 'aen-made', madeTxt));
-    const acts = el('div', 'aen-acts');
-    const open = el('button', 'btn sm', 'Open the report'); open.dataset.press = '1';
-    const dl = el('button', 'btn-line sm', 'Download Word'); dl.dataset.press = '1';
-    const pr = el('button', 'btn-line sm', 'Print'); pr.dataset.press = '1';
-    const seen = el('button', 'btn-line sm', 'Seen'); seen.dataset.press = '1';
-    acts.append(open, dl, pr, seen); bar.appendChild(acts); panel.appendChild(bar);
-    const mount = el('div', 'aen-inline'); mount.id = 'aenInline'; panel.appendChild(mount);
-
-    const report = await loadReport(me.aen, mine.latest.name);
-    open.onclick = () => openReader(report, false);
-    dl.onclick = async () => { const done = MX.busy(dl, 'Preparing…'); try { saveBlob(await docxBlob(report), docxName(report)); done('Saved ✓'); } catch (e) { done('Failed', 'err'); } };
-    pr.onclick = () => openReader(report, true);
-    seen.onclick = () => markSeen(seen, date);
-    // show the gap summary behind the reader; §25.2: on landing, the report is open in the reader (Close returns here)
-    mount.appendChild(inlineSummary(report));
-    openReader(report, false);
+    show(me.role === 'aen' ? 'vAen' : 'vToday');
   }
-  function autoCheckTail(auto) { if (!auto || !auto.results) return ''; const done = (auto.slots || []).filter(s => auto.results[s] && auto.results[s].done); if (done.length <= 1) return ''; const last = done[done.length - 1]; return ' · checked ' + last + (changedAt(auto, last) ? '' : ', no change'); }
-  function changedAt() { return false; }
-  let readerAt = null;
-  function openReader(report, printAfter, stale) {
-    readerAt = report.aen + '|' + report.date + '|' + (report.generatedAt || '');
-    Reader.open({ title: 'AEN/' + report.aen + ' · ' + dmy(report.date) + (stale ? ' · loading newer…' : ''), report, filename: docxName(report),
-      blob: () => docxBlob(report),                         // the Download: the exact Word file (no display-only breaks)
-      measure: () => AMPDocx.measureBlob(report),            // on screen: one flat page to measure the real heights
-      display: (spec) => AMPDocx.displayBlob(report, spec),  // then one section per page at the measured breaks
-      reportMistake: (section, text) => sendMistake(report.aen, report.date, section, text), onSeen: () => {} });
-    if (printAfter) setTimeout(() => window.print(), 500);
-  }
-  async function sendMistake(aen, date, section, text) {
-    try { return await call('reportMistake', { aen, date, section, text }); }
-    catch (e) { missing.reportMistake = true; throw new Error('Reporting mistakes is not on the live server yet (preview).'); }
-  }
-  async function openAenDate(d) {
-    const h = await call('history', { aen: me.aen }).catch(() => ({ snapshots: [] }));
-    const s = (h.snapshots || []).filter(x => x.date === d).sort((a, b) => a.name < b.name ? 1 : -1)[0];
-    if (!s) return MX.toast('No report for ' + dmy(d));
-    const report = await loadReport(me.aen, s.name);
-    openReader(report, false);
-  }
-  // §25.2 fix: the "at a glance" line lists the actual gaps (section + the date used), not "see the report"
-  function inlineSummary(R) {
-    const box = el('div', 'summary');
-    box.appendChild(el('div', 'summary-h', 'Today at a glance'));
-    const gaps = gapsFromReport(R);
-    if (!gaps.length) { box.appendChild(el('div', 'small ok', 'All sections on current data.')); return box; }
-    box.appendChild(el('div', 'small', gaps.length + ' section' + (gaps.length > 1 ? 's' : '') + ' on older or missing data:'));
-    const ul = el('ul', 'gap-list');
-    gaps.forEach(g => { const li = el('li', 'gap-item' + (g.error ? ' err' : ' amber'));
-      li.textContent = secTitle(g.section) + ' — ' + (g.error ? 'could not read' : 'older data' + (g.date ? ', ' + dmy(g.date) : ''));
-      li.dataset.press = '1'; li.onclick = () => whyGap({ section: g.section, date: g.date, error: g.error, stale: g.stale, reason: g.reason }); ul.appendChild(li); });
-    box.appendChild(ul); MX.pressAll(box);
-    return box;
-  }
-  function gapsFromReport(R) {
-    const S = R.sections || {}, out = [];
-    Object.keys(S).forEach(k => { const s = S[k]; if (!s || !ST[k]) return;
-      const stale = !!(s.stale || s.dayStale || s.nightStale || s.notAvailedStale || (s.work && s.work.stale) || (s.block && s.block.stale));
-      if (s.ok === false) out.push({ section: k, error: s.error || 'could not read' });
-      else if (stale) out.push({ section: k, stale: true, date: s.dataDate || null });
-    });
-    return out.sort((a, b) => (ST[a.section].no - ST[b.section].no));
+  function show(v) {
+    VIEWS.forEach(id => $(id).hidden = id !== v);
+    document.querySelectorAll('#menuItems button').forEach(b => b.setAttribute('aria-current', b.dataset.view === v ? 'page' : 'false'));
+    tell('');
+    LOAD[v]();
   }
 
-  /* ================= Admin board (§25.3) ================= */
-  async function adminBoard(tab) {
-    const root = $('screen'); root.innerHTML = ''; root.className = 'screen admin';
-    buildMenu(tab || 'today');
-    if (tab && tab !== 'today') return adminTab(tab);
-    root.appendChild(skeletonBoard());
-    let today, st;
-    try { [today, st] = await Promise.all([call('today'), call('adminState').catch(() => ({}))]); }
-    catch (e) { root.innerHTML = ''; root.appendChild(el('div', 'note err', e.message)); return; }
-    root.innerHTML = '';
-    const auto = today.auto || {};
-    root.appendChild(rollup(today));
-    root.appendChild(timeline(auto, st));
-    root.appendChild(freshness(st));
-    root.appendChild(causes(today));
-    root.appendChild(officeList(today, auto));
-    const gen = el('div', 'admin-gen');
-    const g1 = el('button', 'btn-line sm', 'Generate all ten (classic portal)'); g1.dataset.press = '1'; g1.onclick = () => { location.href = 'classic/'; };   // 13.11: generate from /classic/ until wired
-    gen.appendChild(g1); root.appendChild(gen);
-    MX.pressAll(root);
+  /* ---------- Word file (one builder for both sites: web/docx-build.js) ---------- */
+  const docxBlob = R => AMPDocx.docxBlob(R);        // logo + cover artwork, Word-2007 safe
+  const docxName = R => AMPDocx.docxName(R);
+  const saveBlob = (blob, filename) => AMPDocx.saveBlob(blob, filename);
+  async function saveDocx(R) { saveBlob(await docxBlob(R), docxName(R)); }
+  async function download(aen, name, btn) {
+    if (btn) btn.disabled = true;
+    // §20 item 3: a failure is shown where the button is, not only in a passing message
+    const host = btn && btn.parentNode;
+    let note = host ? host.querySelector('.dl-err') : null;
+    if (note) note.remove();
+    let s = null;
+    try { s = await call('snapshot', { aen, name }); }
+    catch (e) { fail('Could not fetch the saved report: ' + e.message); if (btn) btn.disabled = false; return; }
+    try { await saveDocx(s.report); }
+    catch (e) { console.error(e); fail('Could not build the Word file: ' + (e && e.message || e)); }
+    if (btn) btn.disabled = false;
+    function fail(text) {
+      tell(text, 'err');
+      if (host) { note = el('div', 'small err dl-err', text); host.appendChild(note); }
+    }
   }
-  function rollup(today) {
-    const n = (today.aens || []); const ready = n.filter(a => a.latest).length; const gaps = n.filter(a => a.latest && (a.latest.gaps || []).length).length;
-    const box = el('div', 'rollup');
-    box.appendChild(stat(ready, 'ready')); box.appendChild(stat(gaps, 'with gaps')); box.appendChild(stat(10 - ready, 'to do'));
-    return box;
+
+  /* ---------- preview on screen (spec §24.1): the same .docx blob, drawn by docx-preview ---------- */
+  let pvEl = null, pvBlob = null, pvReport = null;
+  function previewPanel() {
+    if (pvEl) return pvEl;
+    const back = el('div', 'pv-back'); back.id = 'pvBack';
+    const panel = el('div', 'pv-panel');
+    const head = el('div', 'pv-head');
+    const title = el('div', 'pv-title'); title.id = 'pvTitle';
+    const dl = el('button', 'btn', 'Download'); dl.id = 'pvDl';
+    dl.onclick = () => { if (pvBlob && pvReport) saveBlob(pvBlob, docxName(pvReport)); };
+    const close = el('button', 'btn-line', 'Close'); close.onclick = closePreview;
+    const acts = el('div', 'pv-acts'); acts.append(dl, close);
+    head.append(title, acts);
+    const body = el('div', 'pv-body'); body.id = 'pvBody';
+    panel.append(head, body); back.appendChild(panel);
+    back.onclick = e => { if (e.target === back) closePreview(); };
+    document.body.appendChild(back);
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && pvEl && pvEl.style.display !== 'none') closePreview(); });
+    window.addEventListener('resize', () => { if (pvEl && pvEl.style.display !== 'none') fitPreview(); });
+    pvEl = back; return back;
   }
-  function stat(n, lab) { const s = el('div', 'stat'); s.appendChild(el('div', 'stat-n num', String(n))); s.appendChild(el('div', 'stat-l small', lab)); return s; }
-  function timeline(auto, st) {
-    const box = el('div', 'tl card'); box.appendChild(el('div', 'tl-h', 'This morning'));
-    const line = el('div', 'tl-line');
-    const tms = (st && st.tmsControl && st.tmsControl.at) ? String(st.tmsControl.at).slice(11, 16) : null;
-    const steps = [['07:30', 'cut-off', true], ['TMS', tms ? 'data ' + tms : 'data —', !!tms]];
-    (auto.slots || ['08:30', '09:00', '09:30', '10:00']).forEach(sl => { const r = auto.results && auto.results[sl]; steps.push([sl, slotWords(r, auto.next === sl), r && r.done, r]); });
-    steps.forEach(([t, s2, done, r]) => { const node = el('div', 'tl-step' + (done ? ' done' : '')); node.appendChild(el('div', 'tl-t mono', t)); node.appendChild(el('div', 'tl-s small', s2));
-      if (r && r.failed && r.failed.length) node.title = r.failed.map(f => f.aen + ': ' + f.error).join('\n'); line.appendChild(node); });
-    box.appendChild(line);
-    if (!auto.enabled) box.appendChild(el('div', 'small faint', 'Automatic reports are off.'));
-    return box;
+  function openPreview(label) {
+    const p = previewPanel(); p.style.display = 'flex'; document.body.style.overflow = 'hidden';
+    $('pvTitle').textContent = label || 'Report';
+    $('pvDl').disabled = true; pvBlob = null; pvReport = null;
+    $('pvBody').innerHTML = ''; $('pvBody').appendChild(el('div', 'pv-msg', 'Preparing the preview…'));
   }
-  // §24.2 slot result in words, not "1✓ 1×"
-  function slotWords(r, isNext) {
-    if (!r || !r.done) return isNext ? 'next' : '—';
-    const parts = [];
-    if (r.saved) parts.push(r.saved + ' saved');
-    if (r.unchanged) parts.push(r.unchanged + ' unchanged');
-    if (r.failed && r.failed.length) parts.push(r.failed.length + ' failed');
-    return parts.length ? parts.join(' · ') : 'done';
+  function closePreview() { if (pvEl) pvEl.style.display = 'none'; document.body.style.overflow = ''; $('pvBody').innerHTML = ''; }
+  async function preview(aen, name, btn, label) {
+    if (btn) btn.disabled = true;
+    openPreview(label);
+    let s = null;
+    try { s = await call('snapshot', { aen, name }); }
+    catch (e) { previewFail('Could not fetch the saved report: ' + e.message, null, name); if (btn) btn.disabled = false; return; }
+    try {
+      pvReport = s.report; pvBlob = await docxBlob(s.report);
+      $('pvDl').disabled = false;
+      await renderPreview(pvBlob);
+    } catch (e) {
+      console.error(e);
+      // §24.1: a preview that fails says why and still offers Download (the blob, if we built it, downloads fine)
+      previewFail('Could not show the report on screen: ' + (e && e.message || e), s && s.report, name);
+    }
+    if (btn) btn.disabled = false;
   }
-  // §25.3 freshness: one chip per source SHEET, tabs folded in, the oldest date shown, worst colour; full names on tap
-  function freshness(st) {
-    const box = el('div', 'fresh card');
-    const h = el('div', 'fresh-head'); h.appendChild(el('div', 'tl-h', 'Sources'));
-    const legend = el('div', 'fresh-legend small'); legend.innerHTML = '<span class="lg green">today</span><span class="lg amber">yesterday</span><span class="lg red">older</span>';
-    h.appendChild(legend); box.appendChild(h);
-    const strip = el('div', 'fresh-strip'); const tbl = (st && st.sourcesTable) || {};
-    const sheets = {};               // sheet name -> { tabs:Set, oldest, latest }
-    Object.keys(tbl).forEach(aen => (tbl[aen].rows || []).forEach(r => {
-      const parts = String(r.source || r.id || '').split('›'); const sheet = parts[0].trim() || r.id; const tab = (parts[1] || '').trim();
-      const g = sheets[sheet] || (sheets[sheet] = { sheet, tabs: new Set(), oldest: null, hasMissing: false });
-      if (tab) g.tabs.add(tab);
-      if (!r.date) g.hasMissing = true; else if (!g.oldest || r.date < g.oldest) g.oldest = r.date;
-    }));
-    const all = Object.values(sheets);
-    const newest = all.map(g => g.oldest).filter(Boolean).sort().slice(-1)[0] || '';
-    if (!all.length) strip.appendChild(el('div', 'small faint', 'No source dates yet.'));
-    all.sort((a, b) => (a.oldest || '0') < (b.oldest || '0') ? -1 : 1).forEach(g => {
-      const d = g.oldest, cls = g.hasMissing && !d ? 'red' : !d ? 'red' : d === newest ? 'green' : d >= addDays(newest, -1) ? 'amber' : 'red';
-      const chip = el('button', 'fresh-chip ' + cls); chip.dataset.press = '1';
-      const tabN = g.tabs.size; const label = tidySheet(g.sheet) + (tabN > 1 ? ' · ' + tabN + ' tabs' : '') + ' · ' + (d ? d.split('-').reverse().slice(0, 2).join('.') : '—');
-      chip.textContent = label; chip.title = g.sheet + (tabN ? ' — tabs: ' + [...g.tabs].join(', ') : '') + (d ? ' — oldest ' + dmy(d) : ' — not read');
-      chip.onclick = () => MX.toast(chip.title);
-      strip.appendChild(chip);
+  async function renderPreview(blob) {
+    const body = $('pvBody'); body.innerHTML = '';
+    const doc = el('div', 'pv-doc'), scaleEl = el('div', 'pv-scale');
+    doc.appendChild(scaleEl); body.appendChild(doc);
+    // docx-preview draws the real .docx (no second HTML layout). The page keeps its real width; fitPreview zooms the
+    // whole thing to the panel width (fit to width, scroll down — spec §24.1).
+    await window.docxPreview.renderAsync(blob, scaleEl, null, { inWrapper: true, ignoreLastRenderedPageBreak: true });
+    fitPreview();
+  }
+  function fitPreview() {
+    const body = $('pvBody'), doc = body && body.querySelector('.pv-doc'), scaleEl = doc && doc.querySelector('.pv-scale');
+    if (!scaleEl) return;
+    scaleEl.style.transform = 'none';
+    let w = 0; scaleEl.querySelectorAll('section.docx').forEach(s => { w = Math.max(w, s.getBoundingClientRect().width); });   // the real page width
+    if (!w) { const wrap = scaleEl.querySelector('.docx-wrapper'); w = wrap ? wrap.getBoundingClientRect().width : scaleEl.getBoundingClientRect().width; }
+    const natH = scaleEl.getBoundingClientRect().height, avail = body.clientWidth;
+    const scale = w > 0 ? Math.min(1, avail / w) : 1;
+    scaleEl.style.transformOrigin = 'top left';
+    scaleEl.style.transform = 'scale(' + scale + ')';
+    doc.style.height = (natH * scale) + 'px';          // the scaled element is out of flow for height; reserve it so the panel scrolls right
+  }
+  function previewFail(text, report, name) {
+    const body = $('pvBody'); if (!body) { tell(text, 'err'); return; }
+    body.innerHTML = '';
+    body.appendChild(el('div', 'pv-msg err', text));
+    if (report) {
+      const b = el('button', 'btn', 'Download instead'); b.onclick = () => saveBlob(pvBlob || null, docxName(report)) ;
+      if (!pvBlob) { b.textContent = 'Try Download'; b.onclick = () => download(report.aen, name, b); }
+      const wrap = el('div', 'pv-msg'); wrap.appendChild(b); body.appendChild(wrap);
+    }
+  }
+
+  /* ---------- today (Engg/CNL and admin) ---------- */
+  let D = null, today = null;
+  const busy = {};          // aen -> 'run' | 'queue'
+  const failed = {};        // aen -> message
+  let stopping = false, preparing = false, runCount = 0;   // §19: Stop button and the honest counter
+  $('tPick').onchange = () => { if ($('tPick').value) { D = $('tPick').value; loadToday(); } };
+
+  // The ten tiles and the Generate buttons are ready at once; nothing waits for the server.
+  // Which reports were already saved for the date is filled in quietly in the background.
+  const fresh = {};         // aen -> saved in this page for date D (wins over the background answer)
+  function blankDay() {
+    return { date: D, aens: me.offices.map(o => ({ aen: o.aen, office: o.office, count: 0, latest: null })), sources: null };
+  }
+  async function loadToday() {
+    if (!today || today.date !== D) { today = blankDay(); Object.keys(fresh).forEach(k => delete fresh[k]); }
+    drawToday();
+    const asked = D;
+    try {
+      const t = await call('today', { date: asked });
+      if (asked !== D || !t || !Array.isArray(t.aens)) return;
+      t.aens.forEach(x => { const a = today.aens.find(y => y.aen === x.aen); if (a && !fresh[a.aen]) { a.latest = x.latest; a.count = x.count; } });
+      today.sources = t.sources; drawToday();
+    } catch (e) { console.error(e); }          // status only; Generate works without it
+  }
+  function drawHero() {
+    $('tDay').textContent = weekday(D) + ' · Morning position';
+    $('tDate').textContent = dotted(D);
+    const y = addDays(D, -1);
+    $('tLine').textContent = 'Day of ' + dmy(y) + ' and the night following · cut-off ' + (me.cutoff || '');
+  }
+  function stateOf(a) {
+    if (busy[a.aen] === 'run') return { cls: 'run', st: 'Generating…' };
+    if (busy[a.aen] === 'queue') return { cls: 'wait', st: 'Queued' };
+    if (failed[a.aen]) return { cls: 'bad', st: 'Not prepared', gaps: [failed[a.aen]] };
+    if (!a.latest) return { cls: 'wait', st: 'Not prepared yet' };
+    const all = a.latest.gaps || [], g = all.filter(x => x.kind !== 'note'), notes = all.filter(x => x.kind === 'note');
+    return g.length ? { cls: 'gap', st: 'Ready, ' + g.length + (g.length > 1 ? ' gaps' : ' gap'), gaps: g, notes } : { cls: 'ok', st: 'Ready', notes };
+  }
+  function drawToday() {
+    drawHero();
+    let ready = 0, gap = 0;
+    $('tiles').innerHTML = '';
+    today.aens.forEach((a, i) => {
+      const s = stateOf(a);
+      if (s.cls === 'ok') ready++; if (s.cls === 'gap') gap++;
+      const t = el('div', 'tile' + (s.cls === 'gap' || s.cls === 'bad' ? ' gap' : s.cls === 'run' ? ' run' : ''));
+      const meta = el('div', 'meta'); meta.append(el('span', '', two(i + 1)), el('span', '', a.latest ? a.latest.at + (a.latest.auto ? ' · auto' : '') + (a.count > 1 ? ' · ×' + a.count : '') : '—'));
+      t.append(meta, el('div', 'code', a.aen), el('div', 'town', town(a.office)), el('div', 'st ' + s.cls, s.st));
+      // each gap is a link to its explanation; notes that are not gaps follow in grey (spec §13)
+      const gp = el('div', 'gaps');
+      (s.gaps || []).forEach(g => { const line = el('div');
+        if (typeof g === 'string') line.textContent = g;
+        else { const b = el('button', 'why-link', gapText(g)); b.title = asRead(a); b.onclick = () => openWhy(a, g); line.appendChild(b); }
+        gp.appendChild(line); });
+      (s.notes || []).forEach(g => { const b = el('button', 'why-link note', (SECTION[g.section] || g.section) + ': ' + (REASON[g.reason] || g.reason).toLowerCase());
+        b.title = asRead(a); b.onclick = () => openWhy(a, g); gp.appendChild(b); });
+      t.appendChild(gp);
+      const acts = el('div', 'acts');
+      if (!busy[a.aen]) {
+        const g = el('button', a.latest ? 'btn-text' : 'btn-line', a.latest ? 'Generate again' : 'Generate'); g.onclick = () => runQueue([a.aen]);
+        if (a.latest) { const v = el('button', 'btn-line', 'View'); v.onclick = () => preview(a.aen, a.latest.name, v, 'AEN/' + a.aen + ' · ' + dmy(a.latest.date || D));
+          const dl = el('button', 'btn', 'Download'); dl.onclick = () => download(a.aen, a.latest.name, dl); acts.append(v, dl, g); }
+        else acts.appendChild(g);
+      }
+      t.appendChild(acts); $('tiles').appendChild(t);
     });
-    box.appendChild(strip); return box;
+    const left = today.aens.length - ready - gap;
+    $('cReady').textContent = two(ready); $('cGap').textContent = two(gap); $('cLeft').textContent = two(left);
+    // honest counter (spec §19 item 7): done / running / waiting, not "started of ten"
+    const running = today.aens.filter(a => busy[a.aen] === 'run').length;
+    const waiting = today.aens.filter(a => busy[a.aen] === 'queue').length;
+    const done = Math.max(0, runCount - running - waiting);
+    const ga = $('genAll');
+    if (preparing) {
+      $('tProgress').textContent = 'READING EVERY SOURCE ONCE…';
+      ga.textContent = 'Reading sources…'; ga.disabled = false;
+    } else if (stopping) {
+      $('tProgress').textContent = 'STOPPING · ' + running + ' STILL RUNNING';
+      ga.textContent = 'Stopping… (' + running + ' still running)'; ga.disabled = running === 0;
+    } else if (running + waiting > 0) {
+      $('tProgress').textContent = 'GENERATING · ' + done + ' DONE · ' + running + ' RUNNING · ' + waiting + ' WAITING';
+      ga.textContent = 'Stop'; ga.disabled = false;
+    } else {
+      $('tProgress').textContent = left ? left + ' TO GO' : 'ALL READY';
+      ga.textContent = 'Generate all ten'; ga.disabled = false;
+    }
+    drawSources(today.sources);
+    drawAutoLine(today.auto);
   }
-  function tidySheet(s) { return String(s).replace(/\bsheet\b/i, '').replace(/\bexport\b/i, '').replace(/\s{2,}/g, ' ').trim(); }
-  // §25.3 problems grouped by cause — the server already normalised the office out (today.causes)
-  function causes(today) {
-    const box = el('div', 'causes card'); box.appendChild(el('div', 'tl-h', 'Problems grouped by cause'));
-    const list = today.causes || [];
-    if (!list.length) { box.appendChild(el('div', 'small ok', 'No problems across the offices.')); return box; }
-    list.forEach(g => { const row = el('div', 'cause wide'); row.dataset.press = '1';
-      row.appendChild(el('div', 'cause-t', secTitle(g.section) + ': ' + g.text + ' — affects ' + g.offices.length + ' office' + (g.offices.length > 1 ? 's' : '')));
-      row.appendChild(el('div', 'cause-o small faint', g.offices.join(', ')));
-      box.appendChild(row); });
-    return box;
+  // §24.2: "Made automatically 09:00 · next check 09:30" / "last automatic check done" / "Automatic reports are off"
+  function drawAutoLine(au) {
+    const line = $('autoLine'); if (!line) return;
+    if (!au || !au.enabled) { line.textContent = au ? 'Automatic reports are off — prepare them with Generate.' : ''; line.className = 'auto-line off'; return; }
+    const results = au.results || {}, doneSlots = (au.slots || []).filter(s => results[s] && results[s].done);
+    const last = doneSlots.length ? doneSlots[doneSlots.length - 1] : null;
+    let txt;
+    if (!last && au.next) txt = 'Automatic reports on · first check at ' + au.next;
+    else if (au.next) txt = 'Made automatically ' + last + ' · next check ' + au.next;
+    else txt = 'Made automatically ' + (last || '') + ' · last automatic check done';
+    const r = last && results[last] ? results[last] : null;
+    if (r && r.failed && r.failed.length) txt += ' · ' + r.failed.length + ' office' + (r.failed.length > 1 ? 's' : '') + ' still to do';
+    line.textContent = txt; line.className = 'auto-line';
   }
-  function officeList(today, auto) {
-    const box = el('div', 'offices');
-    (today.aens || []).forEach((a, i) => {
-      const row = el('button', 'office wide'); row.dataset.press = '1';
-      const left = el('div', 'office-l'); left.appendChild(el('span', 'office-n', 'AEN/' + a.aen));
-      const stt = a.latest ? ((a.latest.gaps || []).length ? 'gaps' : 'ready') : 'to do';
-      left.appendChild(el('span', 'pill ' + stt, stt + ((a.latest && a.latest.gaps || []).length ? ' ' + a.latest.gaps.length : '')));
-      const right = el('div', 'office-r small faint');
-      right.textContent = a.latest ? (a.latest.auto ? 'auto ' + a.latest.auto : a.latest.at) + (auto && auto.next ? ' · next ' + auto.next : '') : (auto && auto.next ? 'next check ' + auto.next : '');
-      row.append(left, right);
-      row.onclick = () => a.latest ? openAdminReport(a.aen, a.latest.name) : MX.toast('AEN/' + a.aen + ' has no report yet.');
+  function drawSources(s) {
+    const box = $('sources'); box.innerHTML = '';
+    const line = (k, v) => { const r = el('div', 'kv'); r.append(el('span', '', k), el('span', 'mono', v)); box.appendChild(r); };
+    const when = x => x ? (x.at.slice(0, 10) === D ? x.at.slice(11) : dmy(x.at.slice(0, 10)) + ' ' + x.at.slice(11)) : 'not yet';
+    line('Meeting sheet', 'live');
+    if (!s) { line('TMS data', '…'); return; }
+    line('TMS items', when(s.items));
+    line('TMS machines', when(s.machines));
+    line('TMS spot attention', when(s.spotAttention));
+    line('TMS worksites', when(s.worksites));
+    line('TMS inspection plan', when(s.inspPlan));
+    line('TMS Control', s.tmsControl && s.tmsControl.at ? when({ at: String(s.tmsControl.at).replace('T', ' ').slice(0, 16) }) : 'not found');
+  }
+  /** The explanation of one gap or note: the tab link first, then what was looked for, what was found and why (spec §13). */
+  function openWhy(a, g) {
+    const box = $('whyBody'); box.innerHTML = '';
+    $('whyTitle').textContent = 'AEN/' + a.aen + ' · ' + (SECTION[g.section] || g.section);
+    const w = g.why || {}, where = w.where || {};
+    const row = (k, v) => { if (!v) return; const r = el('div', 'why-row'); r.append(el('div', 'label', k), v instanceof Node ? v : el('div', '', v)); box.appendChild(r); };
+    const src = el('div'); src.appendChild(document.createTextNode(where.label || 'Source not recorded'));
+    if (where.url) { src.appendChild(el('br')); const l = el('a', '', 'Open the tab ↗'); l.href = where.url; l.target = '_blank'; l.rel = 'noopener'; src.appendChild(l); }
+    if (where.at) src.appendChild(el('div', 'small', 'Uploaded ' + where.at));
+    row('Where', src);
+    row('Reason', REASON[w.reason || g.reason] || (g.kind === 'error' ? REASON['source-error'] : ''));
+    row('Looked for', w.lookedFor);
+    row('Found', w.found || (g.kind === 'note' ? g.text : g.kind === 'error' ? g.text : ''));
+    if (!g.why && g.kind !== 'note') row('Note', 'This report was prepared before explanations were recorded; generate it again to see why.');
+    if (g.placements && me.role === 'admin') { const b = el('button', 'btn-line', 'Open Placements'); b.onclick = () => { $('why').close(); show('vPlace'); }; box.appendChild(b); }
+    // what this panel is showing is what was read when the report was made, not the sheet as it stands now
+    row('As read', asRead(a));
+    const foot = el('div', 'why-foot');
+    foot.appendChild(el('div', 'small', 'Sheet corrected since? Press Generate again.'));
+    const acts = el('div', 'why-acts'), said = el('div', 'small');
+    if (canGenerate() && g.section) {
+      const rc = el('button', 'btn-line', 'Re-check');
+      rc.onclick = async () => { rc.disabled = true; said.className = 'small'; said.textContent = 'Re-reading the source…';
+        try {
+          const v = await call('recheck', { aen: a.aen, date: today.date, section: g.section });
+          said.className = 'small ' + (v.fixed ? 'ok' : '');
+          said.textContent = v.fixed
+            ? 'Fixed now: found a filled block for ' + dmy(v.dataDate) + ' — the Sources tab shows it; Generate again to put it in the report'
+            : 'Still the same: ' + (v.found || v.error || (v.dataDate ? 'newest entry dated ' + dmy(v.dataDate) : 'nothing newer')) + ' (re-read at ' + v.at.slice(11) + ')';
+        } catch (e) { said.className = 'small err'; said.textContent = e.message; }
+        rc.disabled = false; };
+      acts.appendChild(rc);
+    }
+    if (canGenerate()) { const gen = el('button', 'btn', 'Generate again'); gen.onclick = () => { $('why').close(); runQueue([a.aen]); }; acts.appendChild(gen); }
+    foot.append(acts, said); box.appendChild(foot);
+    $('why').showModal();
+  }
+  /** "as read at 11:26" — when the report this panel came from was made (spec §16 item 11). */
+  const asRead = a => 'as read at ' + ((a.latest && a.latest.at) || '—');
+  const canGenerate = () => me && (me.role === 'admin' || me.role === 'operator');
+  $('whyClose').onclick = () => $('why').close();
+  // "Generate all ten" reads every source once (the batch store, §19) and then builds the ten from it.
+  // While it runs the same button is Stop. A single tile's Generate / Generate again reads fresh (no batch).
+  $('genAll').onclick = () => { if (Object.keys(busy).length || preparing) stopAll(); else runQueue(today.aens.map(a => a.aen), true); };
+  function stopAll() {
+    stopping = true;                                     // start no more offices
+    Object.keys(busy).forEach(a => { if (busy[a] === 'queue') delete busy[a]; });   // waiting ones go back to "Not prepared yet"
+    drawToday();                                         // offices already running finish on their own
+  }
+  function runQueue(list, batch) { return runQueue_(list, batch).catch(e => { preparing = false; tell(e.message, 'err'); console.error(e); }); }
+  async function runQueue_(list, batch) {
+    tell('');
+    list = list.filter(a => !busy[a]);
+    if (!list.length) return;
+    stopping = false; runCount = list.length;
+    list.forEach(a => { busy[a] = 'queue'; delete failed[a]; });
+    drawToday();
+    const endRun = () => { stopping = false; preparing = false; runCount = 0; };
+    let batchId = null;
+    if (batch) {
+      try {
+        preparing = true; drawToday();
+        const p = await prepareParts(D);
+        preparing = false;
+        if (stopping) { list.forEach(a => delete busy[a]); endRun(); drawToday(); return; }   // Stop pressed while reading
+        if (p.stopped) { list.forEach(a => delete busy[a]); endRun(); tell(p.message || 'Reading the sources was stopped — Generate again', 'err'); drawToday(); return; }
+        batchId = p.batchId;
+      } catch (e) { list.forEach(a => delete busy[a]); endRun(); drawToday(); tell(e.message, 'err'); return; }
+    }
+    const one = async aen => {
+      if (stopping) { delete busy[aen]; drawToday(); return; }
+      busy[aen] = 'run'; drawToday();
+      try {
+        const j = await call('generate', batchId ? { date: D, aen, batch: batchId } : { date: D, aen });
+        if (j.stopped) { failed[aen] = j.step || 'stopped at 5 minutes'; }   // §19: a self-stopped build shows as failed on the tile
+        else { const a = today.aens.find(x => x.aen === aen); if (a) { a.latest = j.info; a.count = (a.count || 0) + 1; fresh[aen] = true; } }
+      } catch (e) { failed[aen] = e.message; }
+      delete busy[aen]; drawToday();
+    };
+    const todo = list.slice();
+    const worker = async () => { while (todo.length && !stopping) await one(todo.shift()); };
+    await Promise.all(Array.from({ length: batchId ? 5 : 3 }, worker));   // five offices at a time from the store
+    // the offices wrote only their own files; the shared lists (index, Sources, repairs, admin notes) are brought
+    // up to date once, here — also after Stop. An older server has no finish: nothing to do then.
+    if (batchId) { try { await call('finish', { date: D }); } catch (e) { console.warn('finish: ' + e.message); } }
+    endRun(); drawToday();
+  }
+  /**
+   * Read the shared sources in four parts side by side (spec §19): meeting/IOW/TMS, PIR tabs, PWI tabs, work plans.
+   * The work plans go first and alone: a server that knows parts answers with part 'plans' in a few seconds, and
+   * the other three then start together under the same id; an older server ignores the part, reads everything
+   * once and answers with its own id, which is used as it is.
+   */
+  async function prepareParts(D) {
+    const id = D + '_' + Math.random().toString(36).slice(2, 10).replace(/[^a-z0-9]/g, 'x').padEnd(8, 'x');
+    const first = await call('prepare', { date: D, part: 'plans', batchId: id });
+    if (first.stopped || first.part !== 'plans') return first;              // older server: a whole read already done
+    const rest = await Promise.all(['meeting', 'pir', 'pwi'].map(part => call('prepare', { date: D, part, batchId: id })));
+    const bad = rest.find(r => r.stopped);
+    return bad || { batchId: id, date: D };
+  }
+
+  /* ---------- ruled list of saved reports ---------- */
+  function drawList(box, h, aen, skipToday) {
+    box.innerHTML = '';
+    const head = el('div', 'lrow head'); head.append(el('span', '', 'No.'), el('span', '', 'Report date'), el('span', 'hide-sm', 'Prepared'), el('span', ''));
+    box.appendChild(head);
+    const rows = h.snapshots.filter(s => !s.again && !(skipToday && s.date === me.today));
+    if (!rows.length) { box.appendChild(el('div', 'empty', 'No reports yet.')); return; }
+    rows.slice(0, 60).forEach((s, i) => {
+      const r = el('div', 'lrow');
+      const d = el('span', ''); d.style.fontWeight = '500'; d.textContent = dmy(s.date) + ' ';
+      if (s.times > 1) d.appendChild(el('span', 'small', 'prepared ' + s.times + ' times'));
+      const v = el('button', 'btn-line', 'View'); v.onclick = () => preview(aen, s.name, v, 'AEN/' + aen + ' · ' + dmy(s.date) + (s.auto ? ' · auto ' + s.auto : ''));
+      const b = el('button', 'btn-line', 'Download'); b.onclick = () => download(aen, s.name, b);
+      const end = el('span', 'end'); end.append(v, b);
+      const when = el('span', 'mono hide-sm'); when.textContent = s.at; if (s.auto) when.append(el('span', 'auto-tag', ' auto ' + s.auto));
+      r.append(el('span', 'no', two(i + 1)), d, when, end);
+      box.appendChild(r);
+    });
+  }
+
+  /* ---------- AEN office ---------- */
+  async function loadAen() {
+    $('aOffice').textContent = (me.office || '').replace(/\s*\(.*\)\s*$/, '');
+    $('aCode').textContent = 'AEN/' + me.aen;
+    const tb = $('aToday'); tb.innerHTML = ''; tb.appendChild(el('div', 'small', 'Reading…'));
+    try {
+      const h = await call('history', {});
+      const t = h.snapshots.find(s => s.date === me.today);
+      tb.innerHTML = '';
+      const info = el('div'); info.append(el('div', 'label', 'Today'), el('div', 'd', dotted(me.today)));
+      if (t) {
+        info.appendChild(el('div', 'small', 'Ready since ' + t.at + (t.auto ? ' · made automatically ' + t.auto : '') + ' · Word file'));
+        const v = el('button', 'btn-line', 'View'); v.onclick = () => preview(me.aen, t.name, v, 'AEN/' + me.aen + ' · ' + dmy(t.date));
+        const b = el('button', 'btn', 'Download report'); b.onclick = () => download(me.aen, t.name, b);
+        const acts = el('div', 'acts'); acts.append(v, b);
+        tb.append(info, acts);
+      } else {
+        info.appendChild(el('div', 'small', 'Not prepared yet. Engg/CNL prepares it each morning; please check again shortly.'));
+        tb.appendChild(info);
+      }
+      drawList($('aList'), h, me.aen, true);
+    } catch (e) { tb.innerHTML = ''; tell(e.message, 'err'); }
+  }
+
+  /* ---------- reports (Engg/CNL and admin) ---------- */
+  $('rAen').onchange = () => loadReports();
+  async function loadReports() {
+    const aen = $('rAen').value; $('rList').innerHTML = '';
+    try { drawList($('rList'), await call('history', { aen }), aen, false); } catch (e) { tell(e.message, 'err'); }
+  }
+
+  /* ---------- admin ---------- */
+  let users = [], admins = [];
+  // §26.5 / §27.2 / §27.4 — the Engineering-mail-vs-meeting-sheet cross-checks, as admin issue lines. The bulky
+  // "in the file but not on any watchlist" list is shown as a count only; the actionable rows are listed in full.
+  function compareLines(c) {
+    if (!c) return [];
+    const out = [];
+    const ca = c.cautions;
+    if (ca && !ca.error) {
+      (ca.differ || []).forEach(x => out.push('Caution speed differs (' + x.via + '): file ' + x.fileSpeed + ' vs sheet ' + x.sheetSpeed + ' — ' + x.sheet));
+      (ca.onlySheet || []).forEach(x => out.push('Caution on the meeting sheet, not in the speed file: ' + x));
+      if (ca.counts && ca.counts.onlyFile) out.push(ca.counts.onlyFile + ' caution' + (ca.counts.onlyFile > 1 ? 's' : '') + ' in the speed file not on any watchlist (TDC lapse / PQRS / protection)');
+    }
+    const pq = c.pqrs;
+    if (pq && !pq.error) (pq.onlySheet || []).forEach(x => out.push('PQRS work on the meeting sheet, not in the caution file: ' + x + ' — ' + pq.note));
+    const f = c.failures;
+    if (f && !f.error) {
+      (f.onlySheet || []).forEach(x => out.push('Failure on the meeting sheet, not in the Engg mail: ' + x));
+      (f.onlyMail || []).forEach(x => out.push('Failure in the Engg mail, not on the meeting sheet: ' + x));
+    }
+    const b = c.blocks;
+    if (b && !b.error) {
+      if (b.level === 'row') { (b.diffs || []).forEach(x => out.push('Block ' + x.field + ' differs: mail ' + x.mail + ' vs sheet ' + x.sheet + ' (' + x.section + ')'));
+        (b.onlyMail || []).forEach(x => out.push('Block in the mail, not on the meeting sheet: ' + x));
+        (b.onlySheet || []).forEach(x => out.push('Block on the meeting sheet, not in the mail: ' + x)); }
+      else if (b.level === 'count' && !b.agree) out.push('Block count differs: mail ' + b.mailBlocks + ' (' + dmy(b.mailDate) + ') vs meeting sheet ' + b.sheetBlocks + ' (' + dmy(b.sheetDate) + ')');
+    }
+    return out;
+  }
+  async function loadAdmin() {
+    try {
+      const s = await call('adminState');
+      users = s.users || []; admins = s.admins || [];
+      drawUsers();
+      $('cutoff').value = s.cutoff || '';
+      $('keyState').textContent = s.uploadKeySet ? 'A key is set.' : 'No key yet.';
+      $('dTmsc').textContent = s.tmsControl.ok ? 'Read correctly. Made ' + String(s.tmsControl.generatedAt).replace('T', ' ').slice(0, 16) + ' for ' + (s.tmsControl.aens || []).length + ' AENs.' : 'Not read: ' + s.tmsControl.error;
+      const ub = $('dUploads'); ub.innerHTML = '';
+      const KIND = { items: 'TMS items', machines: 'TMS machine progress', stations: 'Station list' };
+      (s.uploads || []).forEach(u => { const tr = el('tr'); [u.at, KIND[u.kind] || u.kind, u.date ? dmy(u.date) : '—', u.rows == null ? '' : u.rows].forEach(v => tr.appendChild(el('td', '', v))); ub.appendChild(tr); });
+      if (!(s.uploads || []).length) { const tr = el('tr'); const td = el('td', '', 'Nothing received yet.'); td.colSpan = 4; tr.appendChild(td); ub.appendChild(tr); }
+      const iss = $('dIssues'); iss.innerHTML = '';
+      if (s.selfCheck && s.selfCheck.at) { const p = (s.selfCheck.problems || []).length;
+        const sc = el('p', 'small' + (p ? ' err' : ''), 'Source check ' + String(s.selfCheck.at).slice(11, 16) + ': '
+          + (p ? p + ' source' + (p > 1 ? 's' : '') + " can't be read — " + s.selfCheck.problems.join(', ') : 'every source resolved'));
+        iss.appendChild(sc); }
+      Object.keys(s.issues || {}).sort().reverse().slice(0, 7).forEach(d => Object.keys(s.issues[d]).forEach(a => {
+        // rows already answered on the Placements page are not shown again (spec §12)
+        const placed = new Set(s.placed || []), open = (it => (it.unassigned || []).filter(x => { const i = x.indexOf(': ');
+          return !placed.has(placeKey(i < 0 ? x : x.slice(0, i), i < 0 ? '' : x.slice(i + 2))); }));
+        const it = s.issues[d][a], lines = [...open(it).map(x => 'Not placed: ' + x), ...(it.timeFixes || []).map(x => 'Time read from a date: ' + x),
+          ...(it.dateSwaps || []).map(x => 'Date read as dd.mm after a Sheets swap: ' + x), ...compareLines(it.compare)];
+        if (!lines.length) return;
+        iss.appendChild(el('b', '', dmy(d) + ' · AEN/' + a));
+        const ul = el('ul'); lines.forEach(l => ul.appendChild(el('li', '', l))); iss.appendChild(ul);
+      }));
+      if (!iss.querySelector('b')) iss.appendChild(el('p', 'empty', 'No placement or date issues to look at.'));
+      drawSourcesTable(s.sourcesTable || {});
+      drawRepairs(s.repairs || {});
+      drawAuto(s.auto);
+    } catch (e) { tell(e.message, 'err'); console.error(e); }
+  }
+  // §24.2: automatic-generation switch and today's slot results on the Settings page
+  function drawAuto(au) {
+    const tog = $('autoToggle'), st = $('autoState'), box = $('autoSlots');
+    if (!tog || !au) return;
+    const on = !!au.enabled;
+    tog.textContent = on ? 'Turn off' : 'Turn on';
+    tog.onclick = async () => { tog.disabled = true;
+      try { const j = await call('setAuto', { value: on ? 'off' : 'on' }); drawAuto(j.auto); tell('Automatic reports ' + (j.auto.enabled ? 'on' : 'off') + '.', 'ok'); }
+      catch (e) { tell(e.message, 'err'); } tog.disabled = false; };
+    st.textContent = on ? 'On · checks at ' + (au.slots || []).join(', ') : 'Off — reports are made only when someone presses Generate.';
+    st.className = 'small' + (on ? ' ok' : '');
+    box.innerHTML = '';
+    const results = au.results || {};
+    (au.slots || []).forEach(slot => {
+      const r = results[slot], row = el('div', 'auto-slot');
+      row.appendChild(el('span', 'auto-slot-t mono', slot));
+      let txt, cls = '';
+      if (!r) { txt = au.next === slot ? 'next' : (au.after || (au.last && au.slots.indexOf(slot) < au.slots.indexOf(au.last)) ? 'not run' : 'waiting'); cls = 'faint'; }
+      else if (r.running && !r.done) { txt = 'running…'; }
+      else { txt = 'built ' + r.built + ' · saved ' + r.saved + ' · unchanged ' + r.unchanged + (r.failed && r.failed.length ? ' · failed ' + r.failed.length : '') + (r.secs != null ? ' · ' + r.secs + 's' : '');
+        if (r.failed && r.failed.length) cls = 'err'; }
+      row.appendChild(el('span', 'auto-slot-r small ' + cls, txt));
+      if (r && r.failed && r.failed.length) { const fl = el('div', 'auto-fail small err');
+        fl.textContent = r.failed.map(f => f.aen + ': ' + f.error).join('  ·  '); row.appendChild(fl); }
       box.appendChild(row);
     });
-    return box;
+    if (!(au.slots || []).some(s => results[s])) box.appendChild(el('p', 'empty', on ? 'No automatic run yet today.' : 'Automatic reports are off.'));
   }
-  async function openAdminReport(aen, name) {
-    const report = await loadReport(aen, name);
-    openReader(report, false);
-  }
-
-  /* ---- admin tabs: Reports / Checks / Settings ---- */
-  function buildMenu(active) {
-    const m = $('menu'); m.innerHTML = ''; m.hidden = false;
-    [['today', 'Today'], ['reports', 'Reports'], ['checks', 'Checks'], ['settings', 'Settings']].forEach(([k, lab]) => {
-      const b = el('button', 'menu-b sm' + (k === active ? ' on' : '')); b.textContent = lab; b.dataset.press = '1'; b.onclick = () => adminBoard(k); m.appendChild(b);
+  /** Column repairs the program made on its own (spec §16): Keep stores the new name (note stops); Undo makes it a gap again. */
+  function drawRepairs(rep) {
+    const box = $('dRepairs'); box.innerHTML = '';
+    const tabs = Object.keys(rep).filter(t => (rep[t].list || []).length || (rep[t].dates || []).length);
+    if (!tabs.length) { box.appendChild(el('p', 'empty', 'No column changes — every heading was read as known.')); return; }
+    tabs.forEach(t => {
+      box.appendChild(el('b', '', rep[t].tab + (rep[t].at ? ' · ' + rep[t].at : '')));
+      // a block date the rows decided (§16 item 10): read afresh every time, so there is nothing to keep or undo
+      (rep[t].dates || []).forEach(d => {
+        const row = el('div', 'repair-row');
+        row.appendChild(el('span', '', d.why === 'assumed'
+          ? 'two blocks headed ' + dmy(d.was) + ', no date in the rows — the upper one taken as ' + dmy(d.now)
+          : 'heading read ' + dmy(d.was) + ', rows dated ' + dmy(d.now).slice(0, 5) + ' — taken as ' + dmy(d.now).slice(0, 5)
+            + (d.of ? ' (' + d.agree + ' of ' + d.of + ' rows)' : '')));
+        row.appendChild(el('span', 'repair-acts small', 'read afresh each time'));
+        box.appendChild(row);
+      });
+      (rep[t].list || []).forEach(r => {
+        const row = el('div', 'repair-row');
+        row.appendChild(el('span', '', '"' + r.from + '" → "' + r.to + '"' + (r.via && r.via !== 'alt' ? ' (by ' + r.via + ')' : '')));
+        const acts = el('span', 'repair-acts');
+        const keep = el('button', 'btn-line', 'Keep'); keep.onclick = () => decideRepair('keepRepair', r.tab || rep[t].tab, r.col, r.to, keep);
+        const undo = el('button', 'btn-text', 'Undo'); undo.onclick = () => decideRepair('undoRepair', r.tab || rep[t].tab, r.col, r.to, undo);
+        acts.append(keep, undo); row.appendChild(acts); box.appendChild(row);
+      });
     });
-    MX.pressAll(m);
   }
-  async function adminTab(tab) {
-    const root = $('screen');
-    if (tab === 'settings') return settingsTab(root);
-    if (tab === 'checks') return checksTab(root);
-    if (tab === 'reports') { root.appendChild(el('div', 'note', 'Reports: pick an office on Today to open its history.')); return; }
+  async function decideRepair(fn, tab, col, to, btn) {
+    btn.disabled = true;
+    try { const s = await call(fn, { tab, col, to }); drawRepairs(s.repairs || {}); }
+    catch (e) { btn.disabled = false; tell(e.message, 'err'); }
   }
-  async function settingsTab(root) {
-    const card = el('div', 'card'); card.appendChild(el('div', 'tl-h', 'Automatic reports'));
-    let st; try { st = await call('adminState'); } catch (e) { root.appendChild(el('div', 'note err', e.message)); return; }
-    const au = st.auto || { enabled: false, installed: false, slots: [], results: {} };
-    const line = el('div', 'row');
-    const tog = el('button', 'btn-line', au.enabled ? 'Turn off' : 'Turn on'); tog.dataset.press = '1';
-    if (au.installed === false) {
-      // §30: this release installs no run times, so there is nothing to switch on — say so and disable the toggle.
-      tog.disabled = true; tog.classList.add('is-disabled');
-      line.appendChild(tog); line.appendChild(el('span', 'small faint', 'Not set up in this release (no run times installed).'));
-    } else {
-      tog.onclick = async () => { const done = MX.busy(tog); try { const j = await call('setAuto', { value: au.enabled ? 'off' : 'on' }); done(); MX.toast('Automatic reports ' + (j.auto.enabled ? 'on' : 'off')); settingsTab2(root); } catch (e) { done(); MX.toast(e.message); } };
-      line.appendChild(tog); line.appendChild(el('span', 'small', au.enabled ? 'On · checks at ' + (au.slots || []).join(', ') : 'Off'));
-    }
-    card.appendChild(line);
-    const email = el('div', 'row'); email.style.marginTop = '12px';
-    const et = el('button', 'btn-line', 'Email when ready: ' + (st.emailOn ? 'on' : 'off')); et.dataset.press = '1';
-    et.onclick = async () => { if (missing.setEmail) return MX.toast('Email is not on the live server yet (preview).'); const done = MX.busy(et); try { const j = await call('setEmail', { value: st.emailOn ? 'off' : 'on' }); done(); MX.toast('Email ' + (j.emailOn ? 'on' : 'off')); } catch (e) { done(); missing.setEmail = true; MX.toast('Email is not on the live server yet (preview).'); } };
-    email.appendChild(et); email.appendChild(el('span', 'small faint', 'Default off.')); card.appendChild(email);
-    root.appendChild(card);
+  /**
+   * Sources down, the ten AENs across: the date each AEN's latest report found in each source (spec §13). Green: current by
+   * the section's own rule; amber: one day older than that; red: older, none or unreadable. Each cell links to the tab.
+   */
+  /* ---------- Sources (spec §17): every source, linked, read-only ---------- */
+  const STATE = { current: 'Current', repaired: 'Repaired', nothingForAen: 'Nothing for this AEN',
+    olderData: 'Older data', readerNotRun: 'Reader not run today', cantRead: "Can't read", notGenerated: 'Not generated yet' };
+  let sources = null;
+  async function loadSources() {
+    const box = $('sTable');
+    if (!sources || sources.date !== D) { box.innerHTML = ''; box.appendChild(el('p', 'empty', 'Reading the list of tabs…')); }
+    try { sources = await call('sources', { date: D }); } catch (e) { box.innerHTML = ''; box.appendChild(el('p', 'empty', e.message)); return; }
+    drawSheets(sources); drawSourceRows(sources);
+    try { const st = await call('adminState'); drawSourcesTable(st.sourcesTable || {}); } catch (e) { /* the per-AEN table is extra */ }
   }
-  function settingsTab2(root) { root.innerHTML = ''; buildMenu('settings'); settingsTab(root); }
-  async function checksTab(root) {
-    const card = el('div', 'card'); card.appendChild(el('div', 'tl-h', 'Mistakes reported'));
-    try { const j = await call('mistakes'); const list = j.mistakes || [];
-      if (!list.length) card.appendChild(el('div', 'small ok', 'None reported.'));
-      list.forEach(m2 => { const row = el('div', 'mistake'); row.appendChild(el('div', '', m2.text)); row.appendChild(el('div', 'small faint', 'AEN/' + m2.aen + ' · ' + dmy(m2.date) + ' · ' + secTitle(m2.section) + ' · ' + (m2.by || ''))); card.appendChild(row); });
-    } catch (e) { missing.mistakes = true; card.appendChild(el('div', 'small faint', 'Reporting mistakes is not on the live server yet (preview).')); }
-    root.appendChild(card);
+  function drawSheets(v) {
+    const box = $('sSheets'); box.innerHTML = '';
+    v.sheets.forEach(sh => {
+      const row = el('div', 'sheet-row');
+      row.appendChild(el('span', '', sh.name));
+      if (sh.url) { const a = el('a', '', 'Open sheet ↗'); a.href = sh.url; a.target = '_blank'; a.rel = 'noopener'; row.appendChild(a); }
+      if (sh.error) row.appendChild(el('span', 'small err', sh.error));
+      box.appendChild(row);
+    });
+    if (v.account) box.appendChild(el('p', 'small', 'All of them are read with ' + v.account + ', and only read.'));
+    if (v.selfCheck && v.selfCheck.at) { const p = v.selfCheck.problems || 0;
+      box.appendChild(el('p', 'small' + (p ? ' err' : ''), 'Source check at ' + String(v.selfCheck.at).slice(11, 16) + ': '
+        + (p ? p + ' source' + (p > 1 ? 's' : '') + " can't be read — see the red rows below" : 'every source resolved'))); }
+    if (v.generated) { const n = v.generated.length;
+      box.appendChild(el('p', 'small', n + ' of the ' + v.offices + ' offices prepared for ' + dmy(v.date)
+        + (n ? ' \u2014 ' + v.generated.join(', ') + '. A source only they read reports what they found; "Not generated yet" means no report has reached it yet.'
+             : '. Nothing has been read yet today, so every state below says so.'))); }
+  }
+  function drawSourceRows(v) {
+    const box = $('sTable'); box.innerHTML = '';
+    const tb = el('table', 't src-list'), thead = el('thead'), hd = el('tr');
+    ['Report section', 'Source', 'Open', 'Newest data found', 'Last read', 'State'].forEach(h => hd.appendChild(el('th', '', h)));
+    thead.appendChild(hd); tb.appendChild(thead);
+    const body = el('tbody');
+    let part = null;
+    v.rows.forEach(r => {
+      if (r.no !== part) { part = r.no; const sep = el('tr', 'part-row'); const td = el('td', '', r.no + '  ' + r.part);
+        td.colSpan = 6; sep.appendChild(td); body.appendChild(sep); }
+      const tr = el('tr');
+      tr.appendChild(el('td', 'src-sec', r.name + (r.aen ? ' · ' + r.aen : '')));
+      const nm = el('td', 'src-name'); nm.appendChild(document.createTextNode(r.source));
+      if (r.renamed) nm.appendChild(el('div', 'small', 'renamed since the spec; read under this name'));
+      if (r.menu) nm.appendChild(el('div', 'small', r.menu));
+      tr.appendChild(nm);
+      const op = el('td');
+      if (r.url) { const a = el('a', '', 'Open ↗'); a.href = r.url; a.target = '_blank'; a.rel = 'noopener'; op.appendChild(a); }
+      else op.appendChild(el('span', 'small', r.tms || r.tmsc ? 'read by the TMS reader' : '—'));
+      tr.appendChild(op);
+      const dt = el('td', 'src-c ' + dateClass(r));
+      dt.appendChild(el('span', '', r.date ? dmy(r.date) : (r.read ? 'none' : '—')));
+      if (!r.sameEverywhere) { const u = el('div', 'small');
+        u.textContent = r.perAen.map(x => x.aen + ' ' + (x.date ? dmy(x.date).slice(0, 5) : '—')).join(' · '); dt.appendChild(u); }
+      tr.appendChild(dt);
+      tr.appendChild(el('td', 'src-c', r.lastRead ? String(r.lastRead).slice(11, 16) : '—'));
+      const st = el('td', 'src-state');
+      const label = sourceStateLabel(r);
+      const b = el('button', 'why-link state-' + r.state, label);
+      b.onclick = () => openSourceWhy(r);
+      st.appendChild(b);
+      // §21 item 2: a red row says what Google said, not only "Can't read"
+      if (r.state === 'cantRead' && r.error) st.appendChild(el('div', 'small err', r.error));
+      if (r.repairs || r.dateMoves) st.appendChild(el('div', 'small', [r.repairs ? r.repairs + ' heading' : '', r.dateMoves ? 'block date from the rows' : ''].filter(Boolean).join(' · ')));
+      const said = el('div', 'small');
+      const rc = el('button', 'btn-text', 'Re-check');
+      rc.onclick = async () => { rc.disabled = true; said.className = 'small'; said.textContent = 'Re-reading…';
+        try { const x = await call('recheck', { aen: r.whyAen || me.offices[0].aen, date: D, section: r.section });
+          said.className = 'small ' + (x.fixed ? 'ok' : '');
+          said.className = 'small ' + (x.fixed ? 'ok' : 'err');
+          said.textContent = x.fixed ? 'Fixed now' + (x.dataDate ? ': ' + dmy(x.dataDate) : '')
+            : 'Still the same' + (x.error ? ': ' + x.error : x.dataDate ? ': newest ' + dmy(x.dataDate) : '') + (x.at ? ' (' + String(x.at).slice(11) + ')' : '');
+          // §21 item 3: the server has already put the new read in place of the old one; redraw the rows from it
+          if (x.fixed) setTimeout(() => { if (sources && sources.date === D) loadSources(); }, 1200);
+        } catch (e) { said.className = 'small err'; said.textContent = e.message; }
+        rc.disabled = false; };
+      st.append(rc, said);
+      tr.appendChild(st);
+      body.appendChild(tr);
+    });
+    tb.appendChild(body); box.appendChild(tb);
+  }
+  /** "Older for BWN, KWAE — 02.11" when only some AENs are behind; "Older data — 02.11" when all are (§21 item 4). */
+  function sourceStateLabel(r) {
+    if (r.state !== 'olderData') return STATE[r.state] || r.state;
+    const d = r.behindDate || r.date, when = d ? ' — ' + dmy(d).slice(0, 5) : '';
+    const few = r.behind && r.behind.length && r.perAen && r.behind.length < r.perAen.length;
+    return (few ? 'Older for ' + r.behind.join(', ') : STATE.olderData) + when;
+  }
+  const dateClass = r => ({ current: 'green', repaired: 'green', olderData: 'amber', readerNotRun: 'amber',
+    cantRead: 'red', nothingForAen: 'neutral', notGenerated: 'grey' }[r.state] || 'grey');
+  /** The same explanation the tile shows, opened from a source row. */
+  async function openSourceWhy(r) {
+    if (!r.whyAen || !r.whySnapshot) { tell('No saved report has read this source yet — generate one first.', 'err'); return; }
+    try {
+      const j = await call('snapshot', { aen: r.whyAen, name: r.whySnapshot });
+      const sec = (j.report.sections || {})[r.section] || {};
+      const g = { section: r.section, kind: sec.ok ? 'stale' : 'error',
+        text: sec.ok ? 'latest available data used' : sec.error, why: (sec.why || {}).gap || null };
+      openWhy({ aen: r.whyAen, latest: { at: r.whySnapshot.slice(11, 13) + ':' + r.whySnapshot.slice(13, 15) } }, g);
+    } catch (e) { tell(e.message, 'err'); }
+  }
+  function drawSourcesTable(st) {
+    const box = $('dSources'); box.innerHTML = '';
+    const aens = me.offices.map(o => o.aen).filter(a => st[a]);
+    if (!aens.length) { box.appendChild(el('p', 'empty', 'No report has been prepared since this table was added.')); return; }
+    const order = [], cell = {};
+    aens.forEach(a => (st[a].rows || []).forEach(r => { if (!order.includes(r.source)) order.push(r.source); const k = r.source + '|' + a;
+      if (!cell[k] || r.error || (r.stale && !cell[k].error)) cell[k] = r; }));
+    const tb = el('table', 't src-t'), hd = el('tr'); hd.appendChild(el('th', '', 'Source'));
+    aens.forEach(a => { const th = el('th', ''); th.append(el('div', '', a), el('div', 'small', dmy(st[a].date).slice(0, 5) + ' ' + String(st[a].generatedAt || '').slice(11))); hd.appendChild(th); });
+    const thead = el('thead'); thead.appendChild(hd); tb.appendChild(thead);
+    const body = el('tbody');
+    order.forEach(src => { const tr = el('tr'); tr.appendChild(el('td', 'src-name', src));
+      aens.forEach(a => { const r = cell[src + '|' + a], td = el('td', 'src-c');
+        if (!r) { td.textContent = ''; tr.appendChild(td); return; }
+        const behind = r.date && r.stale && r.date >= addDays(st[a].date, -2);
+        td.className = 'src-c ' + (r.error || !r.date ? 'red' : !r.stale ? 'green' : behind ? 'amber' : 'red');
+        const txt = r.error ? 'not read' : r.date ? dmy(r.date).slice(0, 5) : 'none';
+        const v = r.url ? el('a', '', txt) : el('span', '', txt); if (r.url) { v.href = r.url; v.target = '_blank'; v.rel = 'noopener'; }
+        td.appendChild(v); if (r.at) td.appendChild(el('div', 'small', String(r.at).slice(11, 16)));
+        td.title = [r.error, r.reason ? REASON[r.reason] : '', r.at ? 'uploaded ' + r.at : ''].filter(Boolean).join(' · ');
+        tr.appendChild(td); });
+      body.appendChild(tr); });
+    tb.appendChild(body); box.appendChild(tb);
+  }
+  /** The server's placementKey(): where without dates + the row's text, upper case, spaces collapsed. */
+  const placeKey = (where, text) => String(where || '').toUpperCase().replace(/\b\d{1,2}[.\/-]\d{1,2}[.\/-]\d{2,4}\b/g, '').replace(/\s+/g, ' ').trim()
+    + '|' + String(text || '').toUpperCase().replace(/\s+/g, ' ').trim();
+
+  /* ---------- admin: Placements (spec §12) ---------- */
+  async function loadPlacements() {
+    try { drawPlacements(await call('placements')); } catch (e) { tell(e.message, 'err'); console.error(e); }
+  }
+  async function answer(where, text, ans) {
+    try { drawPlacements(await call('savePlacement', { where, text, answer: ans })); tell(ans == null ? 'Answer removed.' : 'Saved. It is used in every report from now on.', 'ok'); }
+    catch (e) { tell(e.message, 'err'); }
+  }
+  function drawPlacements(v) {
+    const ob = $('pOpen'), db = $('pDone'); ob.innerHTML = ''; db.innerHTML = '';
+    const none = (tb, n, t) => { const tr = el('tr'), td = el('td', 'empty', t); td.colSpan = n; tr.appendChild(td); tb.appendChild(tr); };
+    (v.open || []).forEach(o => {
+      const tr = el('tr');
+      tr.appendChild(el('td', '', o.where)); tr.appendChild(el('td', '', o.text || '—'));
+      tr.appendChild(el('td', 'small', o.days.slice(-3).map(dmy).join(', ') + (o.days.length > 3 ? ' …' : '')));
+      const td = el('td'), row = el('div', 'row'), sel = el('select', 'field');
+      sel.appendChild(el('option', '', 'Belongs to …')); sel.options[0].value = '';
+      (v.aens || []).forEach(a => { const op = el('option', '', 'AEN/' + a); op.value = a; sel.appendChild(op); });
+      sel.onchange = () => { if (sel.value) answer(o.where, o.text, sel.value); };
+      const ig = el('button', 'btn-line', 'Ignore'), sw = el('button', 'btn-line', 'Date swap');
+      ig.onclick = () => answer(o.where, o.text, 'ignore'); sw.onclick = () => answer(o.where, o.text, 'swap');
+      [sel, ig, sw].forEach(x => row.appendChild(x)); td.appendChild(row); tr.appendChild(td); ob.appendChild(tr);
+    });
+    if (!(v.open || []).length) none(ob, 4, 'Nothing waiting. Every row is placed.');
+    (v.answered || []).forEach(o => {
+      const tr = el('tr');
+      [o.where, o.text || '—', o.aen ? 'AEN/' + o.aen : o.ignore ? 'Ignore' : 'Date swap', (o.by || '') + (o.at ? ' · ' + o.at : '')].forEach(x => tr.appendChild(el('td', '', x)));
+      const td = el('td'), b = el('button', 'btn-line', 'Undo'); b.onclick = () => answer(o.where, o.text, null); td.appendChild(b); tr.appendChild(td); db.appendChild(tr);
+    });
+    if (!(v.answered || []).length) none(db, 5, 'No answers yet.');
   }
 
-  /* ---- Seen (§25.4) ---- */
-  async function markSeen(btn, date) {
-    const done = MX.busy(btn, 'Seen ✓');
-    try { await call('seen', { aen: me.aen, date }); done('Seen ✓'); }
-    catch (e) { missing.seen = true; done('Noted'); MX.toast('Seen is not on the live server yet (preview).'); }
+  function drawUsers() {
+    const tb = $('usersBody'); tb.innerHTML = '';
+    admins.forEach((a, i) => {
+      const tr = el('tr');
+      [a, i ? 'Administrator (backup)' : 'Administrator', 'All', i ? '' : 'P.Way Planning', 'Yes', ''].forEach(v => tr.appendChild(el('td', 'fixed', v)));
+      tb.appendChild(tr);
+    });
+    users.forEach((u, i) => {
+      const tr = el('tr');
+      const email = Object.assign(el('input', 'field'), { type: 'email', value: u.email || '', placeholder: 'email' }); email.setAttribute('aria-label', 'Email');
+      const role = el('select', 'field'); role.setAttribute('aria-label', 'Role');
+      [['aen', 'AEN office (download)'], ['operator', 'Engg/CNL (prepare)']].forEach(([v, t]) => { const o = el('option', '', t); o.value = v; o.selected = (u.role || 'aen') === v; role.appendChild(o); });
+      const aen = el('select', 'field'); aen.setAttribute('aria-label', 'AEN');
+      const ch = el('option', '', 'Choose'); ch.value = ''; aen.appendChild(ch);
+      me.offices.forEach(o => { const op = el('option', '', 'AEN/' + o.aen); op.value = o.aen; op.selected = o.aen === u.aen; aen.appendChild(op); });
+      const name = Object.assign(el('input', 'field'), { value: u.name || '' }); name.setAttribute('aria-label', 'Name or post');
+      const act = Object.assign(el('input'), { type: 'checkbox', checked: u.active !== false }); act.setAttribute('aria-label', 'Active');
+      const del = el('button', 'btn-text', 'Remove'); del.style.color = 'var(--bad)';
+      const sync = () => { aen.disabled = role.value === 'operator'; if (aen.disabled) aen.value = ''; }; role.onchange = sync; sync();
+      const keep = () => Object.assign(u, { email: email.value.trim(), role: role.value, aen: aen.value, name: name.value.trim(), active: act.checked });
+      [email, role, aen, name, act].forEach(x => x.addEventListener('change', keep));
+      del.onclick = () => { users.splice(i, 1); drawUsers(); };
+      [email, role, aen, name, act, del].forEach(x => { const td = el('td'); td.appendChild(x); tr.appendChild(td); });
+      tb.appendChild(tr);
+    });
   }
-  function whyGap(gap) {
-    const node = el('div', 'why');
-    node.appendChild(el('div', 'why-h', secTitle(gap.section)));
-    node.appendChild(el('div', '', gap.reason || gap.error || (gap.stale ? 'Older data was used because the sheet is behind the date.' : 'See the Sources tab.')));
-    if (gap.date) node.appendChild(el('div', 'small faint', 'Data date: ' + dmy(gap.date)));
-    MX.sheet(node);
-  }
+  $('addUser').onclick = () => { users.push({ email: '', role: 'aen', aen: '', active: true }); drawUsers(); const f = $('usersBody').querySelectorAll('input[type=email]'); f[f.length - 1].focus(); };
+  $('saveUsers').onclick = async () => {
+    $('saveUsers').disabled = true;
+    try { const j = await call('saveUsers', { users: users.filter(u => u.email) }); users = j.users; drawUsers(); tell('Users saved.', 'ok'); }
+    catch (e) { tell(e.message, 'err'); }
+    $('saveUsers').disabled = false;
+  };
+  $('saveCutoff').onclick = async () => {
+    try { await call('setCutoff', { cutoff: $('cutoff').value }); me.cutoff = $('cutoff').value; tell('Cut-off saved.', 'ok'); } catch (e) { tell(e.message, 'err'); }
+  };
+  $('newKey').onclick = async () => {
+    try { const j = await call('newUploadKey'); $('keyOut').hidden = false; $('keyOut').textContent = j.uploadKey; $('keyState').textContent = 'New key made. Copy it now.'; }
+    catch (e) { tell(e.message, 'err'); }
+  };
 
-  /* ---------- report caches ---------- */
-  const rcache = {};
-  async function loadReport(aen, name) { const k = aen + '/' + name; if (rcache[k]) return rcache[k]; const j = await call('snapshot', { aen, name }); rcache[k] = j.report; cacheLast(j.report); return j.report; }
-  const saveBlob = (blob, name) => AMPDocx.saveBlob(blob, name);
-
-  /* ---------- skeletons ---------- */
-  function skeletonReport() { const w = el('div', 'skelwrap'); for (let i = 0; i < 5; i++) w.appendChild(MX.skeleton('line')); return w; }
-  function skeletonBoard() { const w = el('div', 'skelwrap'); for (let i = 0; i < 10; i++) w.appendChild(MX.skeleton('bar')); return w; }
-
-  /* ---------- login ---------- */
-  function initLogin() {
-    $('loginEmail').value = store.get('amp_email') || '';
-    $('sendCode').onclick = sendCode; $('verify').onclick = verify;
-    $('loginEmail').onkeydown = e => { if (e.key === 'Enter') sendCode(); };
-    $('loginCode').onkeydown = e => { if (e.key === 'Enter') verify(); };
-    MX.pressAll($('login'));
-  }
-  async function sendCode() {
-    const email = $('loginEmail').value.trim(); if (!email) return msg('msgLogin', 'Enter your email.', 'err');
-    const done = MX.busy($('sendCode'), 'Sending…');
-    try { const j = await call('otpRequest', { email }); store.set('amp_email', email); $('stepEmail').hidden = true; $('stepCode').hidden = false; msg('msgLogin', 'Code sent to ' + (j.sentTo || email), 'ok'); done(); $('loginCode').focus(); }
-    catch (e) { done(); msg('msgLogin', e.message, 'err'); }
-  }
-  async function verify() {
-    const code = $('loginCode').value.trim(); const email = $('loginEmail').value.trim();
-    const done = MX.busy($('verify'), 'Checking…');
-    try { const j = await call('otpVerify', { email, code }); store.set('amp_sess', j.session); done(); me = j.user || null; const m = await call('me'); me = m; afterSignIn(); }
-    catch (e) { done(); msg('msgLogin', e.message, 'err'); }
-  }
-  function msg(id, t, k) { const n = $(id); n.textContent = t; n.className = 'msg' + (k ? ' ' + k : ''); }
-  $('signout') && ($('signout').onclick = () => { call('signOut').catch(() => {}); store.del('amp_sess'); clearCaches(); location.reload(); });
-
-  /* ---------- PWA ---------- */
-  function registerSW() { if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {}); }
-  function lastKey() { return 'last-' + encodeURIComponent((me && me.email) || 'x'); }   // per signed-in user
-  function cacheLast(R) { try { if ('caches' in window && me) caches.open('amp-report').then(c => c.put(lastKey(), new Response(JSON.stringify({ aen: R.aen, name: R.date + '_' + (R.generatedAt || '').slice(11).replace(/:/g,''), date: R.date, report: R }), { headers: { 'Content-Type': 'application/json' } }))); } catch (e) {} }
-  async function readLast() { try { if (!('caches' in window) || !me) return null; const c = await caches.open('amp-report'); const r = await c.match(lastKey()); if (!r) return null; const j = await r.json(); return j && j.report && j.report.aen === me.aen ? j.report : null; } catch (e) { return null; } }
-  function clearCaches() { try { if ('caches' in window) caches.keys().then(ks => ks.forEach(k => caches.delete(k))); if (navigator.serviceWorker) navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.active && r.active.postMessage('clear'))); } catch (e) {} }
-
-  window.addEventListener('DOMContentLoaded', boot);
-  window.__AMP = { call, get me() { return me; } };   // for the screenshot harness
+  /* ---------- go ---------- */
+  if (!C.API_URL) { say($('msgEmail'), 'This site is not configured yet.', 'err'); $('sendCode').disabled = true; }
+  else if (session) start();
 })();

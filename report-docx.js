@@ -726,8 +726,15 @@
       guard(19, "Worksite entry in TMS", ["tmsWorksites"], () => {
       {
         const ws = S.tmsWorksites, parts = [];
+        // user 13.11: two lines — the sheet's worksites, and the entries in TMS (read from TMS only, never from a sheet)
+        const ps = S.pwiSites, sheetN = ps && ps.ok !== false && ps.units ? ps.units.reduce((a, u) => a + u.rows.filter(r => r.sheet).length, 0) : null;
+        const sheetDate = ps && ps.work && ps.work.dataDate ? dmy(ps.work.dataDate) : null;
+        const tmsN = ws && ws.ok ? ws.rows.length : null;
+        parts.push(KV([
+          ['Worksites in sheet' + (sheetDate ? ' (PWI at Work Site / Block Site, ' + sheetDate + ')' : ''), sheetN == null ? 'sheet not read' : String(sheetN)],
+          ['Worksite entries in TMS' + (ws && ws.ok ? ' (' + dmy(ws.dataDate) + ')' : ''), tmsN == null ? 'TMS not read' : String(tmsN)]]));
         if (!ws || !ws.ok) parts.push(ERRP(ws || { error: 'not read' }));
-        else if (!ws.rows.length) parts.push(KV([['Worksites entered in TMS for ' + dmy(ws.dataDate), 'None']]));
+        else if (!ws.rows.length) { /* nothing entered in TMS: the two lines above say it */ }
         else {
           const yn = v => ({ v: v || '–', bold: /^no$/i.test(v || '') });
           parts.push(T([{ h: 'Unit' }, { h: 'Block section · line · km', free: true }, { h: 'Work', free: true }, { h: 'Block adequate', a: 'c' }, { h: 'Labour adequate', a: 'c' },

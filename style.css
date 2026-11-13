@@ -182,3 +182,30 @@ td.src-c.neutral{background:var(--warn-soft);color:var(--muted)} td.src-c.grey{b
 .state-nothingForAen{color:var(--muted)} .state-notGenerated{color:var(--faint)}
 .src-list .small.ok{color:var(--ok)}
 .src-list .small.err{color:var(--bad)}
+
+/* ---------- preview panel (spec §24.1): the real .docx drawn by docx-preview, fit to width ---------- */
+.pv-back{position:fixed;inset:0;z-index:50;display:none;background:rgba(31,23,18,.55);justify-content:center;align-items:stretch}
+.pv-panel{background:var(--ground);width:min(960px,100%);margin:auto;display:flex;flex-direction:column;max-height:100%;height:100%;box-shadow:0 10px 40px rgba(0,0,0,.3)}
+@media(min-width:720px){.pv-panel{height:92vh;margin:4vh auto;border-radius:4px;overflow:hidden}}
+.pv-head{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--maroon);color:var(--maroon-ink);flex:0 0 auto}
+.pv-title{font-family:var(--serif);font-weight:600;font-size:15px;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pv-acts{display:flex;gap:8px;flex:0 0 auto}
+.pv-acts .btn-line{background:transparent;color:var(--maroon-ink);border-color:var(--gold-soft)}
+.pv-acts .btn-line:hover:not(:disabled){background:rgba(255,255,255,.12)}
+.pv-body{flex:1 1 auto;overflow:auto;-webkit-overflow-scrolling:touch;padding:12px;background:#6b6b6b}
+.pv-doc{position:relative;overflow:hidden}
+.pv-scale{display:inline-block;transform-origin:top left}
+.pv-msg{padding:16px;color:var(--ink);background:var(--paper);border-radius:3px;margin-bottom:10px}
+.pv-msg.err{color:var(--bad);border:1px solid var(--warn-rule);background:var(--warn-soft)}
+.pv-body .docx-wrapper{background:transparent;padding:0;display:inline-block}
+.pv-body .docx-wrapper>section.docx{margin:0 0 10px;box-shadow:0 1px 6px rgba(0,0,0,.35)}
+
+/* ---------- automatic reports (spec §24.2) ---------- */
+.auto-line{margin-top:8px;font-size:13px;color:var(--maroon-ink);opacity:.95}
+.auto-line.off{opacity:.8;font-style:italic}
+.auto-tag{color:var(--gold);font-weight:500}
+.auto-slots{display:flex;flex-direction:column;gap:6px}
+.auto-slot{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;padding:6px 0;border-bottom:1px solid var(--rule-soft)}
+.auto-slot-t{min-width:48px;font-weight:600;color:var(--maroon)}
+.auto-slot-r.faint{color:var(--faint)}
+.auto-fail{flex-basis:100%}

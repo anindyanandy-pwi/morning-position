@@ -158,7 +158,7 @@
         else if (o.keep === 'next') rows = rows.map(r => r._kept());
         else if (o.keep !== false) rows = rows.map(r => { if (r._head) return r._kept(); const i = k++; return (i < 2 || i >= body - 3) && i < body - 1 ? r._kept() : r; });
         const tb = new Table({ width: { size: widths.reduce((a, c) => a + c, 0), type: WidthType.DXA },
-        columnWidths: widths, layout: TableLayoutType.FIXED, rows }); tb._rows = rows; tb._w = widths.reduce((a, c) => a + c, 0); tb._h = rows.reduce((a, r) => a + r._h, 0); return tb; };
+        columnWidths: widths, layout: TableLayoutType.FIXED, rows }); tb._rows = rows; tb._widths = widths; tb._w = widths.reduce((a, c) => a + c, 0); tb._h = rows.reduce((a, r) => a + r._h, 0); return tb; };
       const H = (labels, widths, size) => TR({ tableHeader: true, cantSplit: true,
         children: labels.map((l, i) => cell(l, widths[i], { fill: GREY, bold: true, align: C, size })) });
       const Rw = (vals, widths, aligns, o = {}) => TR({ cantSplit: true,
@@ -173,6 +173,9 @@
       const norm_ = t => String(t).replace(/^(\d{1,2})[\/.](\d{2})$/, '$1:$2');
       const nightOf = (from, to) => from && to ? from.slice(8, 10) + '/' + dmy(to) : (to ? dmy(to) : '');
       const notYet = what => what + ' not yet in the sheet';
+      // the Engineering Control mail of D-1 is the current source for the report of D; when it is older than that, the
+      // section heading says which day's mail is still missing (the header itself prints the "older data: " prefix)
+      const mailLate = older => older ? 'mail of ' + dmy(addDays(D, -1)) + ' not yet received' : null;
       /* ---------- heading: Eastern Railway letterhead (पूर्व रेलवे · IR logo · EASTERN RAILWAY) ---------- */
       const HIN = 'Nirmala UI';      // Hindi font present on every Windows PC
       const hrun = (t, o = {}) => tag(new TextRun({ text: t, font: { ascii: HIN, hAnsi: HIN, cs: HIN }, size: o.size || SZ, bold: !!o.bold, sizeComplexScript: o.size || SZ, boldComplexScript: !!o.bold }), t, (o.size || SZ) * 1.25, o.bold);
@@ -272,7 +275,7 @@
         const n0 = SECS.length;
         try { fn(); return; } catch (e) { SECS.length = n0; FAILED.push({ no, error: (e && e.message) || String(e) }); }
         const line = NOTE([['This section was laid out differently when this report was made (' + dmy(D) + ') — shown as saved.', { italics: true, size: 18 }]]);
-        const o = no === '6–7' ? { secs: [6, 7] } : {};
+        const o = no === '7–8' ? { secs: [7, 8] } : {};
         try { add(head(no, title), [line, ...keys.filter(k => S[k]).flatMap(k => savedParts(k, S[k], 0))], o); }
         catch (e2) { SECS.length = n0; add(head(no, title), [line], o); }
       };
@@ -313,6 +316,12 @@
         else if (!gOn) parts.push(KV([['Patrol batches (GPS)', 'Season not started']]));
         else { const g2 = S.gps.row; parts.push(KV([['Patrol batches (GPS)', val(g2.total)], ['Defaulter batches', val(g2.defaulters)],
           ...g2.kinds.map(k => [k.name, val(k.n)]), ...(g2.action ? [['Action taken by AEN', g2.action]] : [])])); }
+        // Keyman GPS — one line from the Keyman table beside the patrolman one, its own heading date (§29 item 6)
+        if (ok('keymanGps') && S.keymanGps.started && S.keymanGps.row) {
+          const k2 = S.keymanGps.row, kd = S.keymanGps.dataDate;
+          parts.push(NOTE('Keyman GPS (' + dmy(kd) + '): ' + val(k2.total) + ' batches, ' + val(k2.defaulters) + ' defaulters'
+            + (k2.lateStart !== '' && k2.lateStart != null ? ', late start ' + k2.lateStart : '')));
+        }
         add(head(2, 'Winter patrolling', 'night of ' + (gOn ? nightOf(addDays(S.gps.dataDate, -1), S.gps.dataDate) : wantNight), gOn && S.gps.stale ? notYet('night ' + wantNight) : null), parts);
       }
       });
@@ -378,19 +387,54 @@
         add(head(4, 'Cautions in the section and TDC overdue', cN.join(' · '), cLate.length ? notYet(cLate.join(', ')) : null), parts);
       }
       });
-      /* 5. bad road */
-      guard(5, "Bad road surface at LC gates", ["badRoad"], () => {
+      /* 5. speed restrictions in force — the Engineering Control caution file (§26), for this AEN:
+         route time loss, work (temporary) cautions by target date, and permanent cautions */
+      guard(5, "Speed restrictions in force", ["speed"], () => {
+      if (S.speed) {
+        const parts = [], sp = S.speed;
+        if (!ok('speed')) parts.push(ERRP(S.speed));
+        else {
+          const sectLine = c => (c.block || c.route || '') + (c.line ? ', ' + c.line : '');
+          const km = c => c.kmFrom + (c.kmTo && c.kmTo !== c.kmFrom ? '–' + c.kmTo : '');
+          const d1 = v => v === null || v === undefined || v === '' ? '–' : (typeof v === 'number' ? v.toFixed(1) : String(v));   // route minutes: always one decimal
+          const tgtCell = c => { const t = c.targetDate ? dmy(c.targetDate) : (c.target || (c.unknownTarget ? c.unknownTarget : '–'));
+            return c.flag === 'red' ? { v: t, a: 'c', bold: true, color: 'C00000' } : c.flag === 'amber' ? { v: t, a: 'c', bold: true, color: 'B45F06' } : { v: t, a: 'c' }; };
+          // route time loss — the summary rows for routes passing through this AEN (▸); an excess over ETA is red
+          const rMine = sp.routes.filter(r => r.mine);
+          if (rMine.length) { parts.push(SUB('Route time loss (routes through AEN/' + R.aen + ')'));
+            parts.push(T([{ h: 'Route' }, { h: 'Lines', a: 'c' }, { h: 'ETA (min)', a: 'c', one: true }, { h: 'Actual (min)', a: 'c', one: true }, { h: 'Excess now', a: 'c', one: true }, { h: 'Excess last wk', a: 'c', one: true }],
+              rMine.map(r => [r.route, r.lines, d1(r.eta), d1(r.actual),
+                r.excessRed ? { v: d1(r.excessNow), a: 'c', bold: true, color: 'C00000' } : { v: d1(r.excessNow), a: 'c' }, d1(r.excessLastWeek)]), { size: 17, hsize: 17 }));
+          } else parts.push(KV([['Route time loss', 'no route through AEN/' + R.aen + ' in the file summary']]));
+          // work (temporary) cautions — past target date red, due today/tomorrow amber
+          if (sp.work.length) { parts.push(SUB('Work (temporary) cautions – ' + sp.work.length));
+            parts.push(T([{ h: 'Sl.', a: 'c', one: true }, { h: 'Speed', a: 'c', one: true }, { h: 'Section / Line' }, { h: 'Km', a: 'c' }, { h: 'Reason / work', free: true }, { h: 'Target', a: 'c', one: true }, { h: 'Days run', a: 'c', one: true }],
+              sp.work.map((c, i) => [String(i + 1), val(c.speed), sectLine(c), km(c), c.reason, tgtCell(c), val(c.daysRunning)]), { size: 17, hsize: 17 }));
+          } else parts.push(KV([['Work (temporary) cautions', 'Nil']]));
+          // permanent cautions (PSR, CRS, S&T, signal …)
+          if (sp.perm.length) { parts.push(SUB('Permanent cautions – ' + sp.perm.length));
+            parts.push(T([{ h: 'Sl.', a: 'c', one: true }, { h: 'Speed', a: 'c', one: true }, { h: 'Section / Line' }, { h: 'Km', a: 'c' }, { h: 'Reason', free: true }, { h: 'Since', a: 'c', one: true }, { h: 'Days', a: 'c', one: true }],
+              sp.perm.map((c, i) => [String(i + 1), val(c.speed), sectLine(c), km(c), c.reason, c.since ? dmy(c.since) : '–', val(c.daysRunning)]), { size: 17, hsize: 17 }));
+          }
+          parts.push(NOTE([['Summary: ', { bold: true, size: 18 }], [sp.summaryLine + '.', { size: 18 }]], { before: 40 }));
+        }
+        add(head(5, 'Speed restrictions in force', ok('speed') ? 'caution file ' + dmy(S.speed.fileDate) : null,
+          ok('speed') && S.speed.fileDate < D ? 'caution file of ' + dmy(D) + ' not yet received' : null), parts);
+      }
+      });
+      /* 6. bad road */
+      guard(6, "Bad road surface at LC gates", ["badRoad"], () => {
       {
         const parts = [];
         if (!ok('badRoad')) parts.push(ERRP(S.badRoad));
         else { const r = S.badRoad.row; parts.push(T([{ h: 'Total LCs', a: 'c', one: true }, { h: 'Open > 15 days', a: 'c', one: true }, { h: 'Open > 20 days', a: 'c', one: true }, { h: 'TDC', a: 'c' }],
           [[r.total, r.d15, r.d20, r.tdc]])); }
-        add(head(5, 'Bad road surface at LC gates', ok('badRoad') && S.badRoad.dataDate ? 'as on ' + dmy(S.badRoad.dataDate) : null, ok('badRoad') && S.badRoad.stale ? notYet('as on ' + dmy(R.period.day)) : null), parts);
+        add(head(6, 'Bad road surface at LC gates', ok('badRoad') && S.badRoad.dataDate ? 'as on ' + dmy(S.badRoad.dataDate) : null, ok('badRoad') && S.badRoad.stale ? notYet('as on ' + dmy(R.period.day)) : null), parts);
       }
       });
-      /* 6. NI LC inspection, 7. CCTV — tabs 42 and 37 list only the AENs with NI LC gates; for the others one line */
-      guard("6–7", "NI LC inspection and CCTV recording check", ["niLc", "cctv"], () => {
-      if (!S.niLc && !S.cctv) add({ no: '6–7', line: 'Sections 6 and 7 not applicable: no NI LC gates under AEN/' + R.aen + '.' }, [], { secs: [6, 7] });
+      /* 7. NI LC inspection, 8. CCTV — tabs 42 and 37 list only the AENs with NI LC gates; for the others one line */
+      guard("7–8", "NI LC inspection and CCTV recording check", ["niLc", "cctv"], () => {
+      if (!S.niLc && !S.cctv) add({ no: '7–8', line: 'Sections 7 and 8 not applicable: no NI LC gates under AEN/' + R.aen + '.' }, [], { secs: [7, 8] });
       else {
         const p6 = [];
         if (!S.niLc) p6.push(NOTE([['Not applicable to AEN/' + R.aen]]));
@@ -400,7 +444,7 @@
           p6.push(KV([['NI LC gates', val(q.total)], ['Inspected within 12-day frequency', val(q.covered)], ['Gateman counselling done', val(q.counselled)],
             ['Due for schedule inspection', q.due ? val(q.due) + ' – overdue' : 'Nil'], ['Inspections: PWI / AEN / (Sr.)DEN', val(q.pwi) + ' / ' + val(q.aen) + ' / ' + val(q.den)],
             ['Total' + cum, val(q.pwiCum) + ' / ' + val(q.aenCum) + ' / ' + val(q.denCum)]])); }
-        add(head(6, 'NI LC inspection', ok('niLc') ? 'as on ' + dmy(S.niLc.dataDate) : null, ok('niLc') && S.niLc.stale ? notYet('as on ' + dmy(R.period.day)) : null), p6);
+        add(head(7, 'NI LC inspection', ok('niLc') ? 'as on ' + dmy(S.niLc.dataDate) : null, ok('niLc') && S.niLc.stale ? notYet('as on ' + dmy(R.period.day)) : null), p6);
         const p7 = [];
         if (!S.cctv) p7.push(NOTE([['Not applicable to AEN/' + R.aen]]));
         else if (!ok('cctv')) p7.push(ERRP(S.cctv));
@@ -409,12 +453,12 @@
           p7.push(KV([['Checked since start of drive', val(c.checked)], ['Exceptions', val(c.exceptions)], ['Scheduled trains checked (last 3 days)', val(c.fixed3)],
             ['Random trains checked (last 3 days)', val(c.random3)], ['Exception on date', c.today || 'Nil'], ['CCTV not working', c.working || 'Nil'],
             ...(c.zeroRemark ? [['Remarks against zero figure', c.zeroRemark]] : [])])); }
-        add(head(7, 'CCTV recording check', ok('cctv') ? 'data of ' + dmy(S.cctv.dataDate) : null, ok('cctv') && S.cctv.stale ? notYet(dmy(R.period.day)) : null), p7);
+        add(head(8, 'CCTV recording check', ok('cctv') ? 'data of ' + dmy(S.cctv.dataDate) : null, ok('cctv') && S.cctv.stale ? notYet(dmy(R.period.day)) : null), p7);
       }
       });
       const unitOf = u => String(u || '').replace(/^\s*(A?DEN|SSE|JE)\s*\/\s*(P\.?\s*W(AY)?\s*\/\s*)?/i, '').replace(/\s*\(/, ' (');
-      /* 8. spot attention due — open spot attention cards by priority per SSE/P.Way unit, TMS summary as on the day (§6) */
-      guard(8, "Spot attention due", ["spot"], () => {
+      /* 9. spot attention due — open spot attention cards by priority per SSE/P.Way unit, TMS summary as on the day (§6) */
+      guard(9, "Spot attention due", ["spot"], () => {
       {
         const sa = S.spot, parts = [];
         if (!sa || !sa.ok) parts.push(ERRP(sa || { error: 'not read' }));
@@ -424,11 +468,11 @@
           parts.push(T([{ h: 'Unit' }, { h: 'P1', a: 'c', one: true }, { h: 'P2', a: 'c', one: true }, { h: 'P3', a: 'c', one: true }, { h: 'Total', a: 'c', one: true }],
             sa.units.map(u => [unitOf(u.unit), ...r4(u)]).concat([[{ v: 'AEN/' + R.aen, bold: true }, ...r4(sa.total).map(v => ({ v, bold: true }))]]), { size: 18, hsize: 18 }));
         }
-        add(head(8, 'Spot attention due', sa && sa.ok ? 'open cards as on ' + dmy(sa.dataDate) : null, sa && sa.ok && sa.stale ? 'TMS reading of ' + dmy(D) + ' not yet sent' : null), parts);
+        add(head(9, 'Spot attention due', sa && sa.ok ? 'open cards as on ' + dmy(sa.dataDate) : null, sa && sa.ok && sa.stale ? 'TMS reading of ' + dmy(D) + ' not yet sent' : null), parts);
       }
       });
-      /* 9. work planned: the plan for the report day itself, from the AEN's tab of the work plan sheet */
-      guard(9, "Work planned for the next day", ["workPlan"], () => {
+      /* 10. work planned: the plan for the report day itself, from the AEN's tab of the work plan sheet */
+      guard(10, "Work planned for the next day", ["workPlan"], () => {
       if (S.workPlan) {
         const wp = S.workPlan, parts = [];
         if (!wp.ok) parts.push(ERRP(wp));
@@ -448,13 +492,13 @@
           : wp.kept ? 'plan for ' + dmy(D) + ' (as read at ' + (wp.keptAt ? String(wp.keptAt).slice(11, 16) : '—') + '; no longer in the sheet)'
           : wp.substitute ? 'plan for ' + dmy(wp.dataDate) + ' — the plan for ' + dmy(wp.wantedDate) + ' is not in the sheet'
           : 'plan for ' + dmy(D) + (wp.inferredDate ? ', its date taken from the next day\'s heading' : '');
-        add(head(9, 'Work planned for the next day', wpSub), parts,
+        add(head(10, 'Work planned for the next day', wpSub), parts,
           { wide: !!(wp.ok && wp.entered && wp.rows.length) });     // ten columns need the full width; long locations and stations wrap
       }
       });
-      /* 10. inspections due — TMS plans inspections by month: what is planned for this month and not yet done, per SSE and
+      /* 11. inspections due — TMS plans inspections by month: what is planned for this month and not yet done, per SSE and
          JE (and the AEN's own), with any planned in earlier months and still not done (§6, option a) */
-      guard(10, "Inspections due", ["inspPlan"], () => {
+      guard(11, "Inspections due", ["inspPlan"], () => {
       {
         const ip = S.inspPlan, parts = [];
         const MON = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -471,12 +515,12 @@
           else parts.push(KV([['Inspections planned for ' + mName, 'none in TMS for this AEN']]));
           if (rows.length && !open) parts.push(NOTE([['All inspections planned for ' + mName + ' so far done.', { italics: true, size: 17 }]], { before: 20 }));
         }
-        add(head(10, 'Inspections due', ip && ip.ok ? 'planned for ' + mName + ' in TMS, as on ' + dmy(ip.dataDate) : null, ip && ip.ok && ip.stale ? 'TMS reading of ' + dmy(D) + ' not yet sent' : null), parts,
+        add(head(11, 'Inspections due', ip && ip.ok ? 'planned for ' + mName + ' in TMS, as on ' + dmy(ip.dataDate) : null, ip && ip.ok && ip.stale ? 'TMS reading of ' + dmy(D) + ' not yet sent' : null), parts,
           { wide: !!(ip && ip.ok && ip.designations.length) });     // asset lists need the full width
       }
       });
-      /* 11. KPI items */
-      guard(11, "KPI items", ["kpi"], () => {
+      /* 12. KPI items */
+      guard(12, "KPI items", ["kpi"], () => {
       {
         const parts = [];
         if (!ok('kpi')) parts.push(ERRP(S.kpi));
@@ -498,32 +542,53 @@
           }
           if (S.kpi.warning) parts.push(NOTE([[S.kpi.warning, { italics: true, size: 18 }]]));
         }
-        add(head(11, 'KPI items', ok('kpi') && S.kpi.generatedAt ? 'from TMS Control, ' + dmy(S.kpi.generatedAt.slice(0, 10)) + ' ' + S.kpi.generatedAt.slice(11, 16) : 'from TMS Control'), parts);
+        add(head(12, 'KPI items', ok('kpi') && S.kpi.generatedAt ? 'from TMS Control, ' + dmy(S.kpi.generatedAt.slice(0, 10)) + ' ' + S.kpi.generatedAt.slice(11, 16) : 'from TMS Control'), parts);
       }
       });
-      /* 12. blocks */
-      guard(12, "Blocks availed and output", ["blocks"], () => {
+      /* 13. blocks */
+      guard(13, "Blocks availed and output", ["blocks"], () => {
       {
-        const bLate = ok('blocks') ? [S.blocks.dayStale ? 'day ' + dmy(R.period.day) : null, S.blocks.nightStale ? 'night ' + wantNight : null].filter(Boolean) : [];
+        const bLate = ok('blocks') && !S.blocks.fromMail ? [S.blocks.dayStale ? 'day ' + dmy(R.period.day) : null, S.blocks.nightStale ? 'night ' + wantNight : null].filter(Boolean) : [];
+        const naText = b => 'Blocks not availed by Engg.: ' + (b.notAvailedDay === null ? '–' : b.notAvailedDay) + ' on ' + dmy(b.notAvailedDate || R.period.day) + '; ' + b.notAvailedMonth + ' this month';
         const parts = [];
         if (!ok('blocks')) parts.push(ERRP(S.blocks));
+        else if (S.blocks.fromMail) {
+          // §27.2: the mail's full blocks for this AEN — section/line, granted/availed/burst and progress — with totals
+          const b = S.blocks, rows = b.mailBlocks, t = b.totals || {};
+          parts.push(T([{ h: 'Sl.', a: 'c', one: true }, { h: 'Section / Line' }, { h: 'Nature of work', free: true }, { h: 'Granted (min)', a: 'c', one: true }, { h: 'Availed (min)', a: 'c', one: true }, { h: 'Burst (min)', a: 'c', one: true }, { h: 'Progress', free: true }],
+            rows.length ? rows.map((r, i) => [String(i + 1), (r.section || '') + (r.line ? ', ' + r.line : ''), r.work, val(r.grantedMin), val(r.availed), val(r.burst), r.progress]) : [[{ v: 'No block availed', span: 7, a: 'c' }]],
+            { size: 17, hsize: 17, foot: [[{ v: 'Total', span: 3, bold: true, a: 'r' }, ...[val(t.granted), val(t.availed), val(t.burst)].map(v => ({ v, bold: true, a: 'c' })), { v: naText(b) }]] }));
+          if (b.notAvailedBlocks && b.notAvailedBlocks.length)
+            parts.push(NOTE([['Not availed: ', { bold: true, size: 17 }], [b.notAvailedBlocks.map(x => (x.section || '') + (x.line ? ' ' + x.line : '') + (x.reason ? ' — ' + x.reason : '')).join('; ') + '.', { italics: true, size: 17 }]], { before: 20 }));
+        }
         else {
           const rows = S.blocks.rows, tot = rows.reduce((a, r) => a + (r.availed || 0), 0);
-          const naText = 'Blocks not availed by Engg.: ' + (S.blocks.notAvailedDay === null ? '–' : S.blocks.notAvailedDay) + ' on ' + dmy(S.blocks.notAvailedDate || R.period.day) + '; ' + S.blocks.notAvailedMonth + ' this month';
           parts.push(T([{ h: 'Sl.', a: 'c', one: true }, { h: 'Day / Night', a: 'c', one: true }, { h: 'Location' }, { h: 'Nature of work', free: true }, { h: 'Block availed (min)', a: 'c', one: true }, { h: 'Progress', free: true }],
             rows.length ? rows.map((r, i) => [String(i + 1), r.when, r.location, r.work, val(r.availed), r.progress]) : [[{ v: 'No block availed', span: 6, a: 'c' }]],
-            { foot: [[{ v: 'Total', span: 4, bold: true, a: 'r' }, { v: String(tot), bold: true, a: 'c' }, { v: naText }]] }));
+            { foot: [[{ v: 'Total', span: 4, bold: true, a: 'r' }, { v: String(tot), bold: true, a: 'c' }, { v: naText(S.blocks) }]] }));
           if (S.blocks.notAvailedStale) parts.push(NOTE([['Note: blocks not availed are of ' + dmy(S.blocks.notAvailedDate) + ' (older data).', { italics: true, bold: true, size: 17 }]], { before: 20 }));
         }
-        add(head(12, 'Blocks availed and output', ok('blocks') ? 'day of ' + dmy(S.blocks.dayDate) + ' and night of ' + nightOf(addDays(S.blocks.nightDate, -1), S.blocks.nightDate)
-          : 'day of ' + dmy(R.period.day) + ' and night of ' + wantNight, bLate.length ? notYet(bLate.join(', ')) : null), parts);
+        const bNote = ok('blocks') ? (S.blocks.fromMail ? 'from the Engineering Control mail, ' + S.blocks.periodLabel
+          : 'day of ' + dmy(S.blocks.dayDate) + ' and night of ' + nightOf(addDays(S.blocks.nightDate, -1), S.blocks.nightDate))
+          : 'day of ' + dmy(R.period.day) + ' and night of ' + wantNight;
+        add(head(13, 'Blocks availed and output', bNote,
+          ok('blocks') && S.blocks.fromMail ? mailLate(S.blocks.older) : (bLate.length ? notYet(bLate.join(', ')) : null)), parts);
       }
       });
-      /* 13. machines */
-      guard(13, "Machine utilisation", ["machines"], () => {
+      /* 14. machines */
+      guard(14, "Machine utilisation", ["machines"], () => {
       {
         const parts = [];
         if (!ok('machines')) parts.push(ERRP(S.machines));
+        else if (S.machines.fromMail) {
+          // §27.3: the mail's machine .xls is the current machine list; effective time comes from TMS where a machine matches
+          const M = S.machines, one = h => ({ h, a: 'c', one: true });
+          parts.push(T([one('Sl.'), { h: 'Machine' }, { h: 'Section / Line' }, { h: 'Block', a: 'c' }, one('Block availed (min)'), one('Eff. time (min)'), { h: 'Supervisor', free: true }],
+            M.rows.length ? M.rows.map((r, i) => [String(i + 1), r.machine, r.location, [r.from, r.to].filter(Boolean).join('–') || '–', val(r.availed), r.awaited ? 'Awaited' : val(r.effective), r.progress]) : [[{ v: 'No machine worked', span: 7, a: 'c' }]],
+            { size: 17, hsize: 17, foot: [[{ v: 'Total', span: 4, bold: true, a: 'r' }, { v: val(M.total.availed), bold: true, a: 'c' }, { v: val(M.total.effective), bold: true, a: 'c' }, { v: '' }]] }));
+          parts.push(NOTE([['Machine-days lost: ', { bold: true, size: 18 }], [M.lost.length ? M.lost.map(l => l.machine + ' – ' + l.reason + (l.remark ? ' (' + l.remark + ')' : '')).join('; ') + '.' : 'Nil.', { size: 18 }]], { before: 50 }));
+          if (M.rows.some(r => r.awaited)) parts.push(NOTE([['Note: ', { bold: true, size: 17 }], ['effective time awaited from TMS for machines not yet in its reading.', { italics: true, size: 17 }]], { before: 20 }));
+        }
         else {
           const M = S.machines, one = h => ({ h, a: 'c', one: true });
           parts.push(T([one('Sl.'), one('Day / Night'), { h: 'Machine' }, { h: 'Location' }, one('Corridor (min)'), one('Block availed (min)'), one('Block util.'), one('Eff. time (min)'), one('Eff. %'), { h: 'Progress', free: true }],
@@ -536,18 +601,80 @@
           if (M.rows.some(r => r.awaited)) notes.push('effective time for night blocks awaited from TMS');
           if (notes.length) parts.push(NOTE([['Note: ', { bold: true, size: 17 }], [notes.join('; ') + '.', { italics: true, size: 17 }]], { before: 20 }));
         }
-        add(head(13, 'Machine utilisation', (ok('machines') && S.machines.nightDate ? 'night of ' + nightOf(S.machines.nightOf, S.machines.nightDate) + '; ' : '') + 'block from meeting sheet, effective time from TMS',
-          ok('machines') && S.machines.nightStale ? notYet('night ' + wantNight) : null), parts);
+        const mNote = ok('machines') && S.machines.fromMail ? 'from the Engineering Control machine report, ' + S.machines.periodLabel
+          : (ok('machines') && S.machines.nightDate ? 'night of ' + nightOf(S.machines.nightOf, S.machines.nightDate) + '; ' : '') + 'block from meeting sheet, effective time from TMS';
+        add(head(14, 'Machine utilisation', mNote,
+          ok('machines') && S.machines.fromMail ? mailLate(S.machines.older) : (ok('machines') && S.machines.nightStale ? notYet('night ' + wantNight) : null)), parts);
       }
       });
-      /* 14. TMS dashboard: read by the TMS reader early on the report day, the position up to the previous day.
+      /* 15. train detention by engineering + asset failures (§27.4), for this AEN, with the division line */
+      guard(15, "Train detention by engineering", ["trainLoss"], () => {
+      if (S.trainLoss) {
+        const parts = [];
+        if (!ok('trainLoss')) parts.push(ERRP(S.trainLoss));
+        else {
+          const tl = S.trainLoss;
+          if (tl.losses.length) { parts.push(SUB('Trains detained (AEN/' + R.aen + ')'));
+            parts.push(T([{ h: 'Sl.', a: 'c', one: true }, { h: 'Train' }, { h: 'Section' }, { h: 'From – To', a: 'c' }, { h: 'Minutes', a: 'c', one: true }, { h: 'Cause', free: true }],
+              tl.losses.map((l, i) => [String(i + 1), l.train, l.section, [l.from, l.to].filter(Boolean).join(' – '), val(l.minutes), l.cause]), { size: 17, hsize: 17 }));
+          } else parts.push(KV([['Trains detained by engineering', 'Nil']]));
+          if (tl.failures.length) { parts.push(SUB('Asset failures (AEN/' + R.aen + ')'));
+            parts.push(T([{ h: 'Sl.', a: 'c', one: true }, { h: 'Dept / type' }, { h: 'Description', free: true }, { h: 'Section' }, { h: 'Duration', a: 'c' }],
+              tl.failures.map((f, i) => [String(i + 1), (f.dept || '') + (f.subType ? ' / ' + f.subType : ''), f.desc, f.section, f.duration]), { size: 17, hsize: 17 }));
+          }
+          parts.push(NOTE([['Division: ', { bold: true, size: 18 }], [tl.division.trains + ' train' + (tl.division.trains === 1 ? '' : 's') + ' detained (' + val(tl.division.minutes) + ' min), ' + tl.division.failures + ' asset failure' + (tl.division.failures === 1 ? '' : 's') + '.', { size: 18 }]], { before: 40 }));
+        }
+        add(head(15, 'Train detention by engineering', ok('trainLoss') ? S.trainLoss.periodLabel : null, mailLate(ok('trainLoss') && S.trainLoss.older)), parts);
+      }
+      });
+      /* 16. USFD testing + flaws (§27.5), for this AEN, with the division line. IMR red, OBS amber */
+      guard(16, "USFD testing and flaws", ["usfd"], () => {
+      if (S.usfd) {
+        const parts = [];
+        if (!ok('usfd')) parts.push(ERRP(S.usfd));
+        else {
+          const uf = S.usfd, fl = f => [(f.imrR || 0) + (f.imrW || 0), (f.obsR || 0) + (f.obsW || 0), (f.dfwR || 0) + (f.dfwO || 0)];
+          const r1 = v => v == null ? v : Math.round(v * 10) / 10;      // TKM to 1 dp, matching the totals and the division line
+          if (uf.tested.length) {
+            parts.push(T([{ h: 'Operator' }, { h: 'Section' }, { h: 'Rail (TKM)', a: 'c', one: true }, { h: 'Total (TKM)', a: 'c', one: true }, { h: 'IMR', a: 'c', one: true }, { h: 'OBS', a: 'c', one: true }, { h: 'DFW', a: 'c', one: true }],
+              uf.tested.map(u => { const [imr, obs, dfw] = fl(u.flaws); return [u.operator, u.section, val(r1(u.railTkm)), val(r1(u.totalTkm)),
+                imr ? { v: val(imr), a: 'c', bold: true, color: 'C00000' } : { v: '–', a: 'c' }, obs ? { v: val(obs), a: 'c', bold: true, color: 'B45F06' } : { v: '–', a: 'c' }, val(dfw) || '–']; }),
+              { size: 17, hsize: 17, foot: [[{ v: 'Total', span: 2, bold: true, a: 'r' }, { v: val(uf.totals.rail), bold: true, a: 'c' }, { v: val(uf.totals.total), bold: true, a: 'c' }, { v: '', span: 3 }]] }));
+          } else parts.push(KV([['USFD testing for AEN/' + R.aen, 'none']]));
+          parts.push(NOTE([['Division: ', { bold: true, size: 18 }], [uf.division.working + ' operators working, ' + uf.division.idle + ' idle; flaws IMR ' + val(uf.division.imr) + ', OBS ' + val(uf.division.obs) + ', DFW ' + val(uf.division.dfw) + '.', { size: 18 }]], { before: 40 }));
+        }
+        add(head(16, 'USFD testing and flaws', ok('usfd') ? S.usfd.periodLabel : null, mailLate(ok('usfd') && S.usfd.older)), parts);
+      }
+      });
+      /* 17. MDU, cess and ballast (§27.6) — the division mini-tables, this AEN's rows in bold */
+      guard(17, "MDU, cess and ballast", ["mdu"], () => {
+      if (S.mdu) {
+        const parts = [], md = S.mdu;
+        if (!ok('mdu')) parts.push(ERRP(S.mdu));
+        else {
+          const tbl = (t, title) => { if (!t || !t.rows.length) return;
+            parts.push(SUB(title));
+            // the group-headed ballast table is all numbers (no free text column); the MDU tables end in long text (TDC / Remarks)
+            const cols = t.header.map((h, i) => ({ h: h || ' ', a: t.groups ? 'c' : undefined, free: !t.groups && i === t.header.length - 1 }));
+            const o = { size: 16, hsize: 16 }; if (t.groups) o.group = t.groups;
+            parts.push(T(cols, t.rows.map(r => r.cells.map(c => r.mine ? { v: c, bold: true } : c)), o)); };
+          tbl(md.mduToday, 'MDU utilisation – today');
+          tbl(md.mduCumulative, 'MDU utilisation – cumulative');
+          tbl(md.ballast, 'Ballast unloading');
+          tbl(md.rakeTdc, 'Rake / TDC');
+          if (!parts.length) parts.push(KV([['MDU, cess and ballast', 'none in the file']]));
+        }
+        add(head(17, 'MDU, cess and ballast', ok('mdu') ? S.mdu.periodLabel : null, mailLate(ok('mdu') && S.mdu.older)), parts);
+      }
+      });
+      /* 18. TMS dashboard: read by the TMS reader early on the report day, the position up to the previous day.
          Not one long table: the items are grouped by subject, each group its own table, laid out by the engine like any
          other section (two groups side by side when they fit). The heading stands above them at full width. */
-      guard(14, "TMS dashboard", ["tms"], () => {
+      guard(18, "TMS dashboard", ["tms"], () => {
       {
-        const h14 = head(14, 'TMS dashboard', ok('tms') ? 'position on the morning of ' + dmy(S.tms.curDate) + (S.tms.prevDate ? ', against the morning of ' + dmy(S.tms.prevDate) : '') : null,
+        const h18 = head(18, 'TMS dashboard', ok('tms') ? 'position on the morning of ' + dmy(S.tms.curDate) + (S.tms.prevDate ? ', against the morning of ' + dmy(S.tms.prevDate) : '') : null,
           ok('tms') && S.tms.stale ? 'the TMS reader has not sent the reading of ' + dmy(D) : null);
-        if (!ok('tms')) add(h14, [ERRP(S.tms)]);
+        if (!ok('tms')) add(h18, [ERRP(S.tms)]);
         else {
           // user, 30.10.2026 / 02.11.2026: spot attention (40) is section 8 and no longer a TMS item at all; TSR and OMS (24-28) are left out; the Sl. column
           // numbers the rows of the section 1, 2, 3 … in order (the TMS item numbers jumped about between the groups);
@@ -560,7 +687,7 @@
           if (other.length) GROUPS.push(['Other items', other]);
           const pd = S.tms.prevDate ? dm(S.tms.prevDate) : 'Prev.', cd = dm(S.tms.curDate);
           const cols = [{ h: 'Sl.', a: 'c', one: true }, { h: 'Item', free: true }, { h: pd, a: 'c', one: true }, { h: cd, a: 'c', one: true }, { h: 'Diff.', a: 'c', one: true }];
-          add(Object.assign(h14, { leadIn: true }), [], { wide: true });          // the heading row; it keeps with the first group
+          add(Object.assign(h18, { leadIn: true }), [], { wide: true });          // the heading row; it keeps with the first group
           GROUPS.forEach(([name, sns]) => {
             const rows = []; let last = null;
             S.tms.rows.filter(t => sns.indexOf(t.sn) >= 0).sort((x, y) => x.sn - y.sn).forEach(t => {
@@ -573,13 +700,13 @@
             // user, 31.10.2026: an item counted from a TMS list names all its places under the table (the AEN's own, the full list)
             const where = S.tms.rows.filter(t => sns.indexOf(t.sn) >= 0 && t.cur && t.places && t.places.length).sort((x, y) => x.sn - y.sn)
               .map(t => NOTE([[(t.sub || t.item) + ': ', { bold: true, size: 16 }], [t.places.join('; '), { size: 16 }]], { before: 20 }));
-            if (rows.length) add({ no: 14, cap: name }, [T(cols, rows, { size: 17, hsize: 17 }), ...where]);
+            if (rows.length) add({ no: 18, cap: name }, [T(cols, rows, { size: 17, hsize: 17 }), ...where]);
           });
         }
       }
       });
-      /* 15. worksite entry in TMS — the TMS Work Site report of the day of D-1: each worksite with its five yes/no checks (§6) */
-      guard(15, "Worksite entry in TMS", ["tmsWorksites"], () => {
+      /* 19. worksite entry in TMS — the TMS Work Site report of the day of D-1: each worksite with its five yes/no checks (§6) */
+      guard(19, "Worksite entry in TMS", ["tmsWorksites"], () => {
       {
         const ws = S.tmsWorksites, parts = [];
         if (!ws || !ws.ok) parts.push(ERRP(ws || { error: 'not read' }));
@@ -591,13 +718,13 @@
             ws.rows.map(r => [unitOf(r.sse), [r.block, r.line, r.from ? 'km ' + r.from + (r.to && r.to !== r.from ? '–' + r.to : '') : ''].filter(Boolean).join(' · '), r.type + (r.execution ? ' (' + r.execution.toLowerCase() + ')' : ''),
               yn(r.blockOk), yn(r.labourOk), yn(r.competency), yn(r.protection), yn(r.safety)]), { size: 17, hsize: 16 }));
         }
-        add(head(15, 'Worksite entry in TMS', ws && ws.ok ? 'worksites of ' + dmy(ws.dataDate) : null), parts);
+        add(head(19, 'Worksite entry in TMS', ws && ws.ok ? 'worksites of ' + dmy(ws.dataDate) : null), parts);
       }
       });
-      /* 16. worksite safety arrangement — PWI unit-wise: the union of the TMS worksites of D-1 (section 15), "PWI at Work
+      /* 20. worksite safety arrangement — PWI unit-wise: the union of the TMS worksites of D-1 (section 19), "PWI at Work
          Site" (day) and "PWI at Block Site" (night), each worksite once (spec §15); IOW unit-wise from the IOW work-site
          protection log, placed by station (§7) */
-      guard(16, "Worksite safety arrangement", ["pwiSites", "iowSites"], () => {
+      guard(20, "Worksite safety arrangement", ["pwiSites", "iowSites"], () => {
       {
         const pw = S.pwiSites, iw = S.iowSites, parts = [], dates = [], late = [];
         const unitName = u => String(u).replace(/^\s*(SSE|JE)\s*\/\s*P\.?\s*W(ay)?\s*\/\s*/i, '');
@@ -638,13 +765,13 @@
               iw.rows.map(r => [[r.unit, r.station].filter(Boolean).join(' · '), r.work + (r.location ? ' (' + r.location + ')' : ''), r.supervisor || '–', chk(r), r.verify || '–']), { size: 17, hsize: 17 }));
         }
         const ds = [...new Set(dates)];
-        add(head(16, 'Worksite safety arrangement', ds.length ? 'work of ' + ds.map(dmy).join(' / ') : null, late.length ? notYet(late.join(', ')) : null), parts);
+        add(head(20, 'Worksite safety arrangement', ds.length ? 'work of ' + ds.map(dmy).join(' / ') : null, late.length ? notYet(late.join(', ')) : null), parts);
       }
       });
-      /* 17. weekly position — Saturdays only; paused until its format is decided */
-      guard(17, "Weekly position", [], () => {
+      /* 21. weekly position — Saturdays only; paused until its format is decided */
+      guard(21, "Weekly position", [], () => {
       if (new Date(D + 'T00:00:00Z').getUTCDay() === 6)
-        add(head(17, 'Weekly position'), [NOTE([['Paused: ', { bold: true, size: 18 }], ['the Saturday weekly position is to be designed.', { italics: true, size: 18 }]])]);
+        add(head(21, 'Weekly position'), [NOTE([['Paused: ', { bold: true, size: 18 }], ['the Saturday weekly position is to be designed.', { italics: true, size: 18 }]])]);
       });
 
       /* ======================= the layout engine =======================
@@ -736,10 +863,12 @@
         const row = (r, o) => { let j = 0; return TR({ cantSplit: true, children: r.map(plain).map(c => { const cw = spanW(j, c.span); const cc = mkCell(c, cw, Object.assign({ a: part.cols[j].a }, o));
           if (!part.cols[j].free && !part.cols[j].one && (!c.span || c.span === 1) && linesAt(val(c.v), cw, size) > 3) viol.push(where + ': "' + val(c.v).slice(0, 30) + '"');
           j += c.span || 1; return cc; }) }); };
-        return table(w, [...(part.nohead ? [] : [H(part.cols.map(c => c.h), w, hsize)]), ...part.rows.map(r => row(r, { size })), ...(part.foot || []).map(r => row(r, { size }))], part.keep ? { keep: part.keep } : {});
+        // an optional group-heading row above the column headers: spanned, shaded cells (e.g. Scope | Progress | Balance)
+        const groupTR = part.group ? TR({ tableHeader: true, cantSplit: true, children: (() => { let j = 0; return part.group.map(g => { const cc = cell(g.label, spanW(j, g.span), { fill: GREY, bold: true, align: C, size: hsize, span: g.span }); j += g.span; return cc; }); })() }) : null;
+        return table(w, [...(groupTR ? [groupTR] : []), ...(part.nohead ? [] : [H(part.cols.map(c => c.h), w, hsize)]), ...part.rows.map(r => row(r, { size })), ...(part.foot || []).map(r => row(r, { size }))], part.keep ? { keep: part.keep } : {});
       };
       const headPara = h => h.line
-        ? para([run(h.no + '.  ', { bold: true, size: 21 }), run(h.line, { size: 19 })], { before: DZ.sec, after: 50, sec: [6, 7] })
+        ? para([run(h.no + '.  ', { bold: true, size: 21 }), run(h.line, { size: 19 })], { before: DZ.sec, after: 50, sec: [7, 8] })
         : h.cap ? para([run(h.cap, { bold: true, size: 18 })], { before: Math.round(DZ.sec * 0.6), after: 30, keepNext: true, sec: [h.no] })
         : section(h.no, h.title, h.note, h.late);
       // a section laid out at a width: its heading and parts; an empty line between two tables keeps Word from joining them
@@ -802,6 +931,9 @@
         const r = new TableRow({ cantSplit: true, children: [cA, cG, cB] }); r._h = Math.max(cA._h, cB._h); r._cant = true;
         const t = new Table({ width: { size: W, type: WidthType.DXA }, columnWidths: [COL, W - 2 * COL, COL], layout: TableLayoutType.FIXED, rows: [r] });
         t._rows = [r]; t._h = r._h; t._secs = rw.s.flatMap(x => x.secs);
+        // §25.1 (08.11 r4) stash the two columns' element lists so the display can split this side-by-side wrapper
+        // between rows of its nested tables (the reader can't cut a 1-row wrapper otherwise). Keeps the download untouched.
+        t._pair = { cols: [rw.s[0].half, rw.s[1].half], colW: COL, gutW: W - 2 * COL };
         return [para('', { exact: 40, keepNext: true }), t];
       };
       const nightTxt = 'Work of ' + dmy(R.period.day) + ' (day) and night of ' + R.period.night.split('/').map(d => d.slice(8, 10)).join('/') + '.' + D.slice(5, 7) + '.' + D.slice(0, 4);
@@ -824,14 +956,17 @@
       /* ---------- page filling: where the main report ends ---------- */
       // Walk the main report as Word would: rows that cannot split move to the next page (with the table's header row repeated).
       // m: every height times m, to see the report as Word may lay it out a little longer or shorter
-      const flow = (els, y0, p0, fills, secs, m) => {
+      // rec (optional): records, for display-only pagination, where the page breaks fall — rec.mark(el) for a break
+      // before a block element, rec.mark(table, rowIndex) for a break between a table's rows. Measurement passes omit it.
+      const flow = (els, y0, p0, fills, secs, m, rec) => {
         let y = y0 || 0, pages = p0 || 1, carry = 0, over = false, waiting = [];   // carry: headings kept with what follows them
         fills = fills || []; secs = secs || {}; m = m || 1;   // how full each finished page is (twips); page where each section starts
-        const add = (h, canSplit, own) => {
+        const add = (h, canSplit, own, el) => {
           h = h * m + carry; carry = 0;
           const at = y + h <= PH || canSplit ? pages : pages + 1;
           [...waiting, ...(own || [])].forEach(n => { if (!(n in secs)) secs[n] = at; }); waiting = [];
           if (y + h <= PH) { y += h; return; }
+          if (rec && el) rec.mark(el);                       // a page break falls before `el`
           if (!canSplit) { if (h > PH) over = true; fills.push(y); pages++; y = h; return; }
           h -= PH - y; fills.push(PH); pages++; while (h > PH) { h -= PH; fills.push(PH); pages++; } y = h;
         };
@@ -844,7 +979,7 @@
         units.forEach(u => {
           if (u.id !== undefined) {                      // a short section, kept whole
             const h = u.els.reduce((a, e) => a + (e._h !== undefined ? e._h : paraH(e, W)), 0);
-            add(h, false, u.els.reduce((a, e) => a.concat(e._sec || e._secs || []), []));
+            add(h, false, u.els.reduce((a, e) => a.concat(e._sec || e._secs || []), []), u.els[0]);
             return;
           }
           const el = u.els[0];
@@ -855,10 +990,11 @@
               while (rs[j]._keep && j + 1 < rs.length) { j++; h += rs[j]._h; }
               if (j === rs.length - 1 && rs[j]._keep) { carry += h * m; i = j + 1; continue; }   // kept with what follows the table
               const before = pages; add(h, j === i && !rs[i]._cant, i === 0 ? el._secs : null); if (pages > before && head && !rs[i]._head) y += head * m;
+              if (rec && pages > before) rec.mark(el, i);   // the table breaks before row i
               i = j + 1;
             }
           } else if (el._kn) { carry += paraH(el, W) * m; if (el._sec) waiting.push(...el._sec); }
-          else add(paraH(el, W), false, el._sec);
+          else add(paraH(el, W), false, el._sec, el);
         });
         if (carry) add(0, false);
         return { pages, y, fills, over };
@@ -904,21 +1040,128 @@
           score: Math.min(worst, lastLoose, brkMin - 0.60) - (over ? 9 : 0),
           middle: pagesF.length ? Math.min(...pagesF) : 100 };      // among layouts of equal cost: the fullest middle pages win
       };
-      const cands = n => { const c = [[]]; for (let i = 1; i < n; i++) { c.push([i]); for (let j = i + 1; j < n; j++) c.push([i, j]); } return c; };
-      const plans = ARR.flatMap(a => cands(a.g.length).map(b => plan(a, b)));
+      // no break and every single fresh-page break; the O(n²) two-break set is computed only on demand (more()), since a
+      // two-break plan costs ≥ 20 and can never beat a ≤1-break plan that already fits well (see the layout chooser below).
+      const cands1 = n => { const c = [[]]; for (let i = 1; i < n; i++) c.push([i]); return c; };
+      const plans = ARR.flatMap(a => cands1(a.g.length).map(b => plan(a, b)));
+      const more = () => ARR.flatMap(a => { const out = []; for (let i = 1; i < a.g.length; i++) for (let j = i + 1; j < a.g.length; j++) out.push(plan(a, [i, j])); return out; });
       // what the tests check: every row's tables fill its width, side-by-side heights, cells wrapping beyond three lines
       const rowInfo = rows => rows.map(rw => rw.kind === 'full'
         ? { kind: 'full', secs: rw.s[0].secs, box: W, tables: rw.s[0].full.filter(e => e._w).map(e => e._w), viol: rw.s[0].full._viol }
         : { kind: 'pair', secs: rw.s.flatMap(x => x.secs), box: COL, tables: rw.s.flatMap(x => x.half.filter(e => e._w).map(e => e._w)),
           heights: rw.s.map(x => x.hHalf), viol: rw.s.flatMap(x => x.half._viol) });
-      const footer = new Footer({ children: [
-        new Paragraph({ alignment: C, children: [
-          run('Page ', { size: 16 }), new TextRun({ children: [PageNumber.CURRENT], font: FONT, size: 16 }),
-          run(' of ', { size: 16 }), new TextRun({ children: [PageNumber.TOTAL_PAGES], font: FONT, size: 16 }),
-          run('   ·   Generated ' + (R.generatedAt || '') + (R.generatedBy ? ' by ' + R.generatedBy : ''), { size: 14 })] }),
+      const footBody = numRun => new Footer({ children: [
+        new Paragraph({ alignment: C, children: [run('Page ', { size: 16 })].concat(numRun).concat([
+          run('   ·   Generated ' + (R.generatedAt || '') + (R.generatedBy ? ' by ' + R.generatedBy : ''), { size: 14 })]) }),
         new Paragraph({ alignment: C, children: [new TextRun({ text: CREDIT, font: FONT, size: 13, color: '808080' })] })] });
+      const footer = footBody([new TextRun({ children: [PageNumber.CURRENT], font: FONT, size: 16 }),
+        run(' of ', { size: 16 }), new TextRun({ children: [PageNumber.TOTAL_PAGES], font: FONT, size: 16 })]);
+      // docx-preview does not compute PageNumber fields across sections, so the display pages get a static "Page n of N".
+      const footerFor = (n, total) => footBody([run(n + ' of ' + total, { size: 16 })]);
       const build = p => p.arr.g.flatMap((g, i) => p.brk.includes(i) ? [para('', { exact: 20, pageBreakBefore: true }), ...g] : g);
-      return { plans, build, footer, rowInfo, heads: SECS.map(sp => ({ no: sp.head.no, title: sp.head.title || sp.head.line, parts: sp.parts.length })) };
+      // §25.1 (08.11) display-only pagination: Word flows the report across pages; docx-preview does not, so the reader
+      // showed one tall page. Re-walk the chosen layout with flow() recording where Word's pages break, then emit the
+      // same elements with a hard page break at each boundary, splitting a table between rows where Word would (its
+      // header repeated). This changes ONLY the on-screen blob; the Download/plain build is untouched.
+      const splitTable = (tb, cuts) => {
+        const rs = tb._rows, widths = tb._widths || tb.options && tb.options.columnWidths;
+        const heads = rs.filter(r => r._head);
+        const pts = [...new Set(cuts)].filter(c => c > 0 && c < rs.length).sort((a, b) => a - b);
+        if (!pts.length) return [tb];
+        const pieces = []; let start = 0;
+        [...pts, rs.length].forEach(cut => {
+          const body = rs.slice(start, cut).filter(r => !r._head);
+          if (!body.length) { start = cut; return; }
+          const rows = start === 0 ? rs.slice(0, cut) : [...heads, ...body];
+          pieces.push(new Table({ width: { size: tb._w, type: WidthType.DXA }, columnWidths: widths, layout: TableLayoutType.FIXED, rows }));
+          start = cut;
+        });
+        return pieces.length ? pieces : [tb];
+      };
+      // §25.1 (08.11 r4) split a side-by-side wrapper (t._pair) between the rows of its nested tables. pairCuts.pair
+      // is, per content column, the body-row indices where each continuation piece starts; both columns break on the
+      // same pages so they stay aligned. Each piece repeats the nested header; the cell's heading/notes above the
+      // table show only on the first piece, trailing notes only on the last. Display only — the download is untouched.
+      const splitWrapper = (tb, pairCuts) => {
+        const P = tb._pair, lists = pairCuts.pair;
+        const colParts = P.cols.map((els, ci) => {
+          const ti = els.findIndex(e => e._rows);
+          const tbl = ti >= 0 ? els[ti] : null;
+          return { pre: ti >= 0 ? els.slice(0, ti) : els, tbl: tbl, post: ti >= 0 ? els.slice(ti + 1) : [], cuts: lists[ci] || [] };
+        });
+        const nP = Math.max.apply(null, colParts.map(cp => cp.cuts.length)) + 1;
+        const outerW = tb._w || (P.colW * P.cols.length + P.gutW * (P.cols.length - 1));
+        const pc = (els, w) => new TableCell({ width: { size: w, type: WidthType.DXA }, borders: NONE, margins: { top: 0, bottom: 0, left: 0, right: 0 }, verticalAlign: VerticalAlign.TOP, children: els.length ? els : [para('')] });
+        const pieces = [];
+        for (let k = 0; k < nP; k++) {
+          const rowCells = [];
+          colParts.forEach((cp, ci) => {
+            if (ci) rowCells.push(pc([para('')], P.gutW));            // the gutter between the two columns
+            const content = [];
+            if (!cp.tbl) { if (k === 0) content.push.apply(content, cp.pre); rowCells.push(pc(content, P.colW)); return; }
+            const heads = cp.tbl._rows.filter(r => r._head), body = cp.tbl._rows.filter(r => !r._head);
+            // a column whose cut list is shorter than this piece index has already placed all its rows on an earlier
+            // piece — it is EMPTY here (cp.cuts[k-1] is undefined → start at body.length → empty slice), never repeated.
+            const s = k === 0 ? 0 : (cp.cuts[k - 1] !== undefined ? cp.cuts[k - 1] : body.length);
+            const e = cp.cuts[k] !== undefined ? cp.cuts[k] : body.length;
+            const slice = s < e ? body.slice(s, e) : [];
+            const widths = cp.tbl._widths || (cp.tbl.options && cp.tbl.options.columnWidths), w = cp.tbl._w || (widths ? widths.reduce((a, b) => a + b, 0) : P.colW);
+            if (k === 0) content.push.apply(content, cp.pre);
+            if (slice.length) content.push(new Table({ width: { size: w, type: WidthType.DXA }, columnWidths: widths, layout: TableLayoutType.FIXED, rows: [...heads, ...slice] }));
+            if (k === nP - 1) content.push.apply(content, cp.post);
+            rowCells.push(pc(content, P.colW));
+          });
+          pieces.push(new Table({ width: { size: outerW, type: WidthType.DXA }, columnWidths: [P.colW, P.gutW, P.colW], layout: TableLayoutType.FIXED, rows: [new TableRow({ cantSplit: true, children: rowCells })] }));
+        }
+        return pieces;
+      };
+      // docx-preview shows a discrete page only per document SECTION (a pageBreakBefore is just invisible CSS on
+      // screen). So buildDisplay returns the body as an array of pages (one element-array per Word page); the caller
+      // emits each as its own section, and docx-preview then lays them out as separate pages, like Word.
+      // buildDisplay(p, spec):
+      //  - no spec        : flow-based page split (the builder's own Word model) — kept for callers/tests.
+      //  - {measure:true} : ONE page with the body elements flat and in order, so the reader can render it once and
+      //                     measure the real height of every block and table row.
+      //  - {breaks}       : split at the reader's MEASURED boundaries — breaks.before is a set of flat-element
+      //                     indices that start a new page; breaks.cuts maps a table's flat index to its split rows.
+      const flatBody = p => p.arr.g.flat();
+      const buildDisplay = (p, spec) => {
+        const flat = flatBody(p);
+        if (spec && spec.measure) return [flat];
+        if (spec && (spec.before || spec.cuts)) {
+          const before = new Set(spec.before || []), cuts = spec.cuts || {};
+          const pages = [[]], put = el => pages[pages.length - 1].push(el), newPage = () => { if (pages[pages.length - 1].length) pages.push([]); };
+          flat.forEach((el, i) => {
+            if (before.has(i)) newPage();
+            const c = cuts[i];
+            if (el._pair && c && c.pair) splitWrapper(el, c).forEach((piece, k) => { if (k) newPage(); put(piece); });
+            else if (el._rows && c && c.length) splitTable(el, c).forEach((piece, k) => { if (k) newPage(); put(piece); });
+            else put(el);
+          });
+          // a section's break lives in its last paragraph; a page that ends in a table needs a trailing paragraph or
+          // docx-preview folds it into the next page. Give every page a zero-height closing paragraph.
+          return pages.filter(pg => pg.length).map(function (pg) { return pg.concat([para('', { exact: 1 })]); });
+        }
+        // default: the builder's Word-model split
+        const brkEl = new Set(), rowCut = new Map();
+        const rec = { mark(el, row) { if (row === undefined) brkEl.add(el); else { const s = rowCut.get(el) || new Set(); s.add(row); rowCut.set(el, s); } } };
+        let st = { y: 0, pages: 1 };
+        p.arr.g.forEach((g, i) => { if (p.brk.includes(i)) st = { y: 0, pages: st.pages + 1 }; st = flow(g, st.y, st.pages, [], {}, 1, rec); });
+        const pages = [[]], put = el => pages[pages.length - 1].push(el), newPage = () => { if (pages[pages.length - 1].length) pages.push([]); };
+        p.arr.g.forEach((g, i) => {
+          if (p.brk.includes(i)) newPage();
+          g.forEach(el => {
+            const cuts = rowCut.get(el);
+            if (brkEl.has(el) || (cuts && cuts.has(0))) newPage();
+            if (el._rows && cuts && [...cuts].some(c => c > 0)) splitTable(el, [...cuts]).forEach((piece, k) => { if (k) newPage(); put(piece); });
+            else put(el);
+          });
+        });
+        return pages.filter(pg => pg.length);
+      };
+      // merge (13.11): preview-fixes' display pagination (buildDisplay / footerFor) + caution-file's on-demand
+      // two-break generator (more) — both are used by the chooser below.
+      return { plans, more, build, buildDisplay, footer, footerFor, rowInfo, heads: SECS.map(sp => ({ no: sp.head.no, title: sp.head.title || sp.head.line, parts: sp.parts.length })) };
     };
 
     /* ---------- choosing the layout ----------
@@ -929,14 +1172,32 @@
       { name: 'a little tight', pad: 15, sec: 90, cost: 0.5 }, { name: 'a little loose', pad: 25, sec: 125, cost: 0.5 },
       { name: 'tight', pad: 10, sec: 75, cost: 1 }, { name: 'loose', pad: 32, sec: 145, cost: 1 },
       { name: 'tighter', pad: 5, sec: 60, cost: 2 }, { name: 'looser', pad: 44, sec: 175, cost: 2 }, { name: 'loosest', pad: 58, sec: 210, cost: 2.5 }];
-    const all = [];
+    const all = [], composed = [];
+    const costOf = (dz, p) => dz.cost + p.arr.cost + 10 * p.brk.length + Math.max(0, 85 - p.middle) / 4;
     (opts.density ? DENSITY.filter(d => d.name === opts.density) : DENSITY).forEach(dz => {
-      const c = compose(dz);
-      c.plans.forEach(p => all.push({ c, p, dz, cost: dz.cost + p.arr.cost + 10 * p.brk.length + Math.max(0, 85 - p.middle) / 4 }));
+      const c = compose(dz); composed.push({ dz, c });
+      c.plans.forEach(p => all.push({ c, p, dz, cost: costOf(dz, p) }));
     });
+    // Two fresh-page breaks cost +20, and every two-break plan's cost is ≥ 20; a ≤1-break plan that is already ok with
+    // cost < 20 therefore wins outright, so the O(n²) two-break set need not be computed. Only when no such plan exists is
+    // it generated — the chosen layout is identical either way, just reached without the quadratic fan-out in the common case.
+    if (!all.some(x => x.p.ok && x.cost < 20)) composed.forEach(({ dz, c }) => c.more().forEach(p => all.push({ c, p, dz, cost: costOf(dz, p) })));
     const better = (x, y) => x.cost - y.cost || y.p.middle - x.p.middle || y.p.end - x.p.end;
     const pick = all.filter(x => x.p.ok).sort(better)[0] || all.filter(x => x.p.okLoose).sort(better)[0] || all.sort((x, y) => y.p.score - x.p.score)[0];
-    const best = pick.p, kids = pick.c.build(best), footer = pick.c.footer, rowsUsed = pick.c.rowInfo(best.arr.rows);
+    const best = pick.p, displayPages = opts.displayPageBreaks ? pick.c.buildDisplay(best, opts.displaySpec) : null,
+      kids = displayPages ? displayPages.flat() : pick.c.build(best), footer = pick.c.footer, rowsUsed = pick.c.rowInfo(best.arr.rows);
+    // in measure mode, hand the reader a description of each flat body block so it can paginate by real height and
+    // split tables at the right rows (block i here is block i in the rendered body).
+    if (opts.displaySpec && opts.displaySpec.measure && opts.onDisplayMeta)
+      opts.onDisplayMeta(displayPages[0].map(function (el) {
+        var m = { table: !!el._rows, rows: el._rows ? el._rows.length : 0, head: el._rows ? el._rows.filter(function (r) { return r._head; }).length : 0 };
+        // a side-by-side wrapper: per content column, the nested tables' {rows, head} in DOM order, so the reader can
+        // measure the nested rows and work out where to cut each column to keep the two columns aligned.
+        if (el._pair) m.pair = el._pair.cols.map(function (col) {
+          return col.filter(function (e) { return e._rows; }).map(function (tb) { return { rows: tb._rows.length, head: tb._rows.filter(function (r) { return r._head; }).length }; });
+        });
+        return m;
+      }));
     const layout = ['report ends ' + Math.round(best.end * 100) + '% down page ' + best.pages + ' (±' + Math.round(best.err * 100) + '%)',
       'pages ' + [...best.fills, Math.round(best.end * 100)].map(x => x + '%').join(' · '),
       pick.dz.name + ' spacing, ' + best.arr.name + ', ' + (best.brk.length ? 'fresh page before part ' + best.brk.join(', ') : 'no forced page break'),
@@ -975,13 +1236,15 @@
       // the contents: the sections in this report, with the page each starts on (the top sheet is page 1)
       const has = n => n in secs, pg = n => String(secs[n] + 1);
       const ITEMS = [[1, 'Mini control exceptions', [['AEN mini control items'], ['PWI mini control items'], ['IOW mini control items']]],
-        [2, 'Winter patrolling'], [3, S.pir && S.pir.ok && S.pir.rows.length ? 'Failures and PIRs' : 'Failures'], [4, 'Cautions and TDC overdue'], [5, 'Bad road surface at LC gates'],
-        [6, 'NI LC inspection'], [7, 'CCTV recording check'], [8, 'Spot attention due'],
-        [9, 'Work planned for the next day', [['Track-circuited area'], ['Non track-circuited area']]], [10, 'Inspections due'], [11, 'KPI items'],
-        [12, 'Blocks availed and output'], [13, 'Machine utilisation'], [14, 'TMS dashboard'], [15, 'Worksite entry in TMS'],
-        [16, 'Worksite safety arrangement', [['PWI unit-wise'], ['IOW unit-wise']]], [17, 'Weekly position']];
+        [2, 'Winter patrolling'], [3, S.pir && S.pir.ok && S.pir.rows.length ? 'Failures and PIRs' : 'Failures'], [4, 'Cautions and TDC overdue'],
+        [5, 'Speed restrictions in force', [['Route time loss'], ['Work (temporary) cautions'], ['Permanent cautions']]], [6, 'Bad road surface at LC gates'],
+        [7, 'NI LC inspection'], [8, 'CCTV recording check'], [9, 'Spot attention due'],
+        [10, 'Work planned for the next day', [['Track-circuited area'], ['Non track-circuited area']]], [11, 'Inspections due'], [12, 'KPI items'],
+        [13, 'Blocks availed and output'], [14, 'Machine utilisation'], [15, 'Train detention by engineering'], [16, 'USFD testing and flaws'],
+        [17, 'MDU, cess and ballast'], [18, 'TMS dashboard'], [19, 'Worksite entry in TMS'],
+        [20, 'Worksite safety arrangement', [['PWI unit-wise'], ['IOW unit-wise']]], [21, 'Weekly position']];
       const saturday = day.getUTCDay() === 6;
-      const shown = ITEMS.filter(([n]) => has(n) || (n === 17 && saturday));
+      const shown = ITEMS.filter(([n]) => has(n) || (n === 21 && saturday));
       const colW = Math.floor((CW - px(40)) / 2), numT = px(30);
       // each contents line: [gap above (px), line height (px), paragraph maker]
       const line = (n, title, page, grey) => o => new Paragraph({ tabStops: [{ type: TabStopType.LEFT, position: numT }, { type: TabStopType.RIGHT, position: colW, leader: LeaderType.DOT }],
@@ -990,8 +1253,8 @@
       const subLine = (title, note) => o => new Paragraph({ indent: { left: numT }, tabStops: [{ type: TabStopType.RIGHT, position: colW }], spacing: o,
         children: [t(title, { px: 12.5, color: '2B2B2B' }), ...(note ? [t('\t' + note, { px: 12.5, italic: true, color: '6B6B6B' })] : [])] });
       const lines = it => { const [n, title, subs] = it;
-        return [[8, 17, line(n, title, n === 17 ? null : pg(n), n === 17)], ...(subs || []).map(([st, note], i) => [i ? 3 : 2, 15, subLine(st, note)])]; };
-      const colL = shown.filter(i => i[0] <= 8).flatMap(lines), colR = shown.filter(i => i[0] > 8).flatMap(lines);
+        return [[8, 17, line(n, title, n === 21 ? null : pg(n), n === 21)], ...(subs || []).map(([st, note], i) => [i ? 3 : 2, 15, subLine(st, note)])]; };
+      const colL = shown.filter(i => i[0] <= 9).flatMap(lines), colR = shown.filter(i => i[0] > 9).flatMap(lines);
       [colL, colR].forEach(c => { if (c.length) c[0][0] = 14; });
       // stretch (or shrink) every gap by the same factor so the contents end at the footer, as on the design
       const SEAL = 256, sum = a => a.reduce((x, y) => x + y, 0);
@@ -1015,7 +1278,7 @@
         t('Prepared by Engg/CNL, Howrah' + (at ? ' · ' + at : ''), { px: 11, color: '555555' }),
         t('\tDesigned & developed by Anindya Nandy · SSE/P.Way/Planning, Howrah Division', { px: 11, color: '555555' })] })] });
       const usedPx = fixedPx + gapPx * k + Math.max(lh + lg * k, rh + rg * k);
-      return { children: kidsC, footer: footerC, fill: usedPx / roomPx, k, index: shown.map(([n]) => [n, n === 17 ? null : +pg(n)]),
+      return { children: kidsC, footer: footerC, fill: usedPx / roomPx, k, index: shown.map(([n]) => [n, n === 21 ? null : +pg(n)]),
         item3: (ITEMS.filter(i => i[0] === 3)[0] || [])[1],
         page: { size: { width: 11906, height: 16838 }, margin: { top: TOP, bottom: BOT, left: px(80.2), right: px(80.2), footer: FOOT } } };
     };
@@ -1024,11 +1287,16 @@
     if (opts.onLayout) opts.onLayout({ cover: { fill: top.fill, k: top.k, index: top.index, item3: top.item3 }, heads: pick.c.heads, density: pick.dz.name, arrangement: best.arr.name, pages: best.pages, end: best.end, err: best.err, ok: best.ok, okLoose: best.okLoose,
       score: best.score, breaks: best.brk, left: best.left, brkMin: best.brkMin, fills: best.fills, starts: best.starts, secs: best.secs, rows: rowsUsed, layout });
 
+    // for display, each Word page is its own document section so docx-preview lays them out as separate pages; the
+    // Download (no displayPages) stays a single body section that Word flows itself.
+    const total = displayPages ? displayPages.length + 1 : 0;   // + the cover
+    const bodySections = displayPages
+      ? displayPages.map(function (childs, i) { return { properties: { page: PAGE }, footers: { default: pick.c.footerFor(i + 2, total) }, children: childs }; })
+      : [{ properties: { page: PAGE }, footers: { default: footer }, children: kids }];
     return new Document({
       creator: 'AEN Morning Position', title: 'Morning Position ' + R.aen + ' ' + D.split('-').reverse().join('.'),
       styles: { default: { document: { run: { font: FONT, size: SZ } } } },
-      sections: [{ properties: { page: top.page }, footers: { default: top.footer }, children: top.children },
-        { properties: { page: PAGE }, footers: { default: footer }, children: kids }]
+      sections: [{ properties: { page: top.page }, footers: { default: top.footer }, children: top.children }].concat(bodySections)
     });
   }
   g.buildMorningDoc = buildMorningDoc;

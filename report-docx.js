@@ -241,7 +241,7 @@
          (work, progress, remarks, reasons) that may take several lines and gets the width left over. */
       const T = (cols, rows, o = {}) => Object.assign({ t: 'table', cols, rows }, o);
       const KV = rows => ({ t: 'kv', rows });
-      const NOTE = (runs, o = {}) => Object.assign({ t: 'note', runs }, o);       // runs: [[text, {bold, italics, size}]]
+      const NOTE = (runs, o = {}) => Object.assign({ t: 'note', runs: Array.isArray(runs) ? runs : [[String(runs == null ? '' : runs), {}]] }, o);   // 13.11: plain text accepted (Keyman line crashed every Word file)       // runs: [[text, {bold, italics, size}]]
       const SUB = text => ({ t: 'sub', text });
       const ERRP = s => NOTE([['Could not be read: ', { bold: true, size: 18 }], [s.error, { italics: true, size: 18 }]]);
       const head = (no, title, note, late) => ({ no, title, note, late });
@@ -319,8 +319,8 @@
         // Keyman GPS — one line from the Keyman table beside the patrolman one, its own heading date (§29 item 6)
         if (ok('keymanGps') && S.keymanGps.started && S.keymanGps.row) {
           const k2 = S.keymanGps.row, kd = S.keymanGps.dataDate;
-          parts.push(NOTE('Keyman GPS (' + dmy(kd) + '): ' + val(k2.total) + ' batches, ' + val(k2.defaulters) + ' defaulters'
-            + (k2.lateStart !== '' && k2.lateStart != null ? ', late start ' + k2.lateStart : '')));
+          parts.push(NOTE([['Keyman GPS (' + dmy(kd) + '): ', { bold: true }], [val(k2.total) + ' batches, ' + val(k2.defaulters) + ' defaulters'
+            + (k2.lateStart !== '' && k2.lateStart != null ? ', late start ' + k2.lateStart : ''), {}]]));
         }
         add(head(2, 'Winter patrolling', 'night of ' + (gOn ? nightOf(addDays(S.gps.dataDate, -1), S.gps.dataDate) : wantNight), gOn && S.gps.stale ? notYet('night ' + wantNight) : null), parts);
       }

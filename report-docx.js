@@ -317,10 +317,12 @@
         else { const g2 = S.gps.row; parts.push(KV([['Patrol batches (GPS)', val(g2.total)], ['Defaulter batches', val(g2.defaulters)],
           ...g2.kinds.map(k => [k.name, val(k.n)]), ...(g2.action ? [['Action taken by AEN', g2.action]] : [])])); }
         // Keyman GPS — one line from the Keyman table beside the patrolman one, its own heading date (§29 item 6)
+        // user 13.11: Keyman GPS gets its own table, like the patrolman part
         if (ok('keymanGps') && S.keymanGps.started && S.keymanGps.row) {
           const k2 = S.keymanGps.row, kd = S.keymanGps.dataDate;
-          parts.push(NOTE([['Keyman GPS (' + dmy(kd) + '): ', { bold: true }], [val(k2.total) + ' batches, ' + val(k2.defaulters) + ' defaulters'
-            + (k2.lateStart !== '' && k2.lateStart != null ? ', late start ' + k2.lateStart : ''), {}]]));
+          parts.push(SUB('Keyman GPS (' + dmy(kd) + (S.keymanGps.stale ? ', older data' : '') + ')'),
+            KV([['Keyman batches (GPS)', val(k2.total)], ['Defaulter batches', val(k2.defaulters)],
+              ['Late start', k2.lateStart !== '' && k2.lateStart != null ? String(k2.lateStart) : '–']]));
         }
         add(head(2, 'Winter patrolling', 'night of ' + (gOn ? nightOf(addDays(S.gps.dataDate, -1), S.gps.dataDate) : wantNight), gOn && S.gps.stale ? notYet('night ' + wantNight) : null), parts);
       }
@@ -669,7 +671,11 @@
         const parts = [], md = S.mdu;
         if (!ok('mdu')) parts.push(ERRP(S.mdu));
         else {
-          const tbl = (t, title) => { if (!t || !t.rows.length) return;
+          // user 13.11: only this AEN's rows (the file's rows are tagged by the place they name); a table with none = Nil
+          const tbl = (t, title, division) => { if (!t) return;
+            const rows = division ? t.rows : t.rows.filter(r => r.mine);
+            if (!rows.length) { if (!division) parts.push(KV([[title, 'Nil']])); return; }
+            t = Object.assign({}, t, { rows: division ? rows : rows.map(r => Object.assign({}, r, { mine: false })) });
             parts.push(SUB(title));
             // the group-headed ballast table is all numbers (no free text column); the MDU tables end in long text (TDC / Remarks)
             const cols = t.header.map((h, i) => ({ h: h || ' ', a: t.groups ? 'c' : undefined, free: !t.groups && i === t.header.length - 1 }));
@@ -677,7 +683,7 @@
             parts.push(T(cols, t.rows.map(r => r.cells.map(c => r.mine ? { v: c, bold: true } : c)), o)); };
           tbl(md.mduToday, 'MDU utilisation – today');
           tbl(md.mduCumulative, 'MDU utilisation – cumulative');
-          tbl(md.ballast, 'Ballast unloading');
+          tbl(md.ballast, 'Ballast unloading – division (the file gives no AEN-wise split)', true);
           tbl(md.rakeTdc, 'Rake / TDC');
           if (!parts.length) parts.push(KV([['MDU, cess and ballast', 'none in the file']]));
         }

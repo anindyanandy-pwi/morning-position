@@ -2,7 +2,7 @@
  * reaches the office on the very next open; the cache is only the offline fallback. The report the viewer opened is
  * cached per signed-in user by the page (caches 'amp-report'), never other offices' data; sign-out clears it.
  * CACHE_VERSION is replaced with the commit by publish-preview.sh so each publish gets a fresh shell cache. */
-const CACHE_VERSION = 'dev';
+const CACHE_VERSION = '1e4911b';
 const SHELL = 'amp-shell-' + CACHE_VERSION;
 const SHELL_FILES = ['./', 'index.html', 'preview.css', 'style.css', 'app.js', 'reader.js', 'motion.js',
   'config.js', 'docx-compat.js', 'report-docx.js', 'docx-build.js', 'ir-logo-256.png', 'cover-frame.png', 'cover-seal.png', 'cover-rule.png', 'cover-contents.png',

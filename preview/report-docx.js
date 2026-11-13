@@ -562,7 +562,7 @@
           // §31.4: Demand column added; the totals foot carries Demanded/Granted/Availed/Burst and the Cancelled count
           parts.push(T([{ h: 'Sl.', a: 'c', one: true }, { h: 'Section / Line' }, { h: 'Nature of work', free: true }, { h: 'Demand (min)', a: 'c', one: true }, { h: 'Granted (min)', a: 'c', one: true }, { h: 'Availed (min)', a: 'c', one: true }, { h: 'Burst (min)', a: 'c', one: true }, { h: 'Progress', free: true }],
             rows.length ? rows.map((r, i) => [String(i + 1), (r.section || '') + (r.line ? ', ' + r.line : ''), r.work, val(r.demand), val(r.grantedMin), val(r.availed), val(r.burst), r.progress]) : [[{ v: 'No block availed', span: 8, a: 'c' }]],
-            { size: 17, hsize: 17, foot: [[{ v: 'Total', span: 3, bold: true, a: 'r' }, ...[val(t.demand), val(t.granted), val(t.availed), val(t.burst)].map(v => ({ v, bold: true, a: 'c' })), { v: 'Cancelled ' + val(t.cancelled) + '. ' + naText(b) }]] }));
+            { size: 17, hsize: 17, foot: [[{ v: 'Total', span: 3, bold: true, a: 'r' }, ...[val(t.demand), val(t.granted), val(t.availed), val(t.burst)].map(v => ({ v, bold: true, a: 'c' })), { v: 'Not availed ' + val(t.notAvailed != null ? t.notAvailed : t.cancelled) + '. ' + naText(b) }]] }));
           if (b.notAvailedBlocks && b.notAvailedBlocks.length)
             parts.push(NOTE([['Not availed: ', { bold: true, size: 17 }], [b.notAvailedBlocks.map(x => (x.section || '') + (x.line ? ' ' + x.line : '') + (x.reason ? ' — ' + x.reason : '')).join('; ') + '.', { italics: true, size: 17 }]], { before: 20 }));
         }

@@ -83,6 +83,7 @@
       const p = isNaN(d1) ? R.date : d1.toISOString().slice(0, 10); R.period = { day: p, night: p + '/' + R.date }; }
     if (!Array.isArray(R.units)) R.units = [];
     const S = R.sections || {}, D = R.date;
+    const SRDEN = R.kind === 'srden';                 // §31.7: a Sr DEN report (merged from the AENs' saved reports)
 
     // The whole report is composed at a given density (cell padding, space above headings); see the end of the file.
     const compose = DZ => {
@@ -272,6 +273,7 @@
       };
       const FAILED = [];
       const guard = (no, title, keys, fn) => {
+        if (SRDEN) return;                             // §31.7: a Sr DEN report builds its own (merged) sections below
         const n0 = SECS.length;
         try { fn(); return; } catch (e) { SECS.length = n0; FAILED.push({ no, error: (e && e.message) || String(e) }); }
         const line = NOTE([['This section was laid out differently when this report was made (' + dmy(D) + ') — shown as saved.', { italics: true, size: 18 }]]);
@@ -931,6 +933,74 @@
         const widest = Math.max(...p.rows.map(r => r.map(plain)).flat().filter(c => !c.span || c.span === 1).map(c => natW(val(c.v), size)), ...p.cols.map(c => (natW(c.h || '', hs, true) - PADX) / 2 + PADX));
         return widest <= COL && sum(f.mn) <= COL;
       });
+      /* ===== §31.7 Sr DEN report: summary page + merged sections, from the AENs' saved reports ===== */
+      const srdenLoaded = () => (R.summary && R.summary.rows || []).map(r => r.aen);
+      const srdenSummaryTable = () => {
+        const su = R.summary || { cols: [], rows: [], totals: { cells: {} }, worst: {} }, loaded = srdenLoaded();
+        const cw = fit([3].concat(loaded.map(() => 2)).concat([2]), W);
+        const header = H(['Measure'].concat(loaded.map(a => 'AEN/' + a)).concat(['Total']), cw, 15);
+        const rows = (su.cols || []).map(c => {
+          const worst = su.worst[c.key], cells = [cell(c.label, cw[0], { align: L, size: 15 })];
+          loaded.forEach((a, i) => { const row = su.rows.find(r => r.aen === a) || { cells: {} }, v = row.cells[c.key];
+            cells.push(cell(String(v == null ? '–' : v), cw[i + 1], { align: C, size: 15, bold: !!(c.worst && worst && v === worst) })); });
+          cells.push(cell(String(su.totals.cells[c.key] == null ? '–' : su.totals.cells[c.key]), cw[cw.length - 1], { align: C, size: 15, bold: true }));
+          return Rw(cells, cw, [], {});
+        });
+        return table(cw, [header].concat(rows));
+      };
+      const srdenMissingNote = () => { const bits = [];
+        if ((R.missing || []).length) bits.push('Not generated yet: ' + R.missing.map(a => 'AEN/' + a).join(', ') + '.');
+        if ((R.older || []).length) bits.push('Older data used: ' + R.older.map(a => 'AEN/' + a).join(', ') + '.');
+        return bits.length ? [para([run('† ' + bits.join('  '), { italics: true, size: 16, color: 'C00000' })], { before: 20 })] : [];
+      };
+      const srdenNotDoneTable = () => {
+        const es = (R.notDone && R.notDone.entries) || [];
+        const title = para([run('Not done, and why', { bold: true, size: 20, color: 'C00000' })], { before: 120 });
+        if (!es.length) return [title, para([run('All planned work done across the Sr DEN’s AENs.', { italics: true, size: 18 })], { before: 20 })];
+        const nw = fit([2, 3, 2, 3, 2], W);
+        return [title, table(nw, [H(['AEN', 'Work', 'Planned', 'What happened', 'Cause'], nw, 16)].concat(
+          es.map(e => Rw(['AEN/' + e.aen, e.work, e.planned, e.what + (e.causeText ? ' — ' + e.causeText : ''), e.cause], nw, ['l', 'l', 'l', 'l', 'l'], { size: 16 }))))];
+      };
+      // one concise line per AEN per section (the summary page above carries the figures); Nil-for-all collapses to a line
+      const SDL = {
+        miniControl: d => len(d.rows) + ' exception(s)', pwiMc: d => len(d.rows) + ' PWI exception(s)',
+        gps: d => d.row ? d.row.defaulters + ' defaulter(s) / ' + d.row.total + ' batches' : 'Nil',
+        keymanGps: d => d.row ? d.row.defaulters + ' defaulter(s) / ' + d.row.total + ' batches' : 'Nil',
+        major: d => len(d.rows) + ' major failure(s)', minor: d => len(d.rows) + ' minor failure(s)',
+        tdcLapse: d => len(d.rows) + ' caution(s) past TDC', pqrsTdc: d => len(d.rows) + ' PQRS TDC fail',
+        enggBlocks: d => d.totals ? (d.totals.demand || 0) + ' min demanded, ' + (d.totals.availed || 0) + ' availed, ' + len(d.notAvailed) + ' not availed' : 'Nil',
+        machines: d => len(d.rows) + ' worked, ' + len(d.lost) + ' idle', usfd: d => len(d.tested) + ' tested',
+        badRoad: d => d.row ? d.row.total + ' LCs (' + (d.row.lcGates ? d.row.lcGates.length : 0) + ' gate nos.)' : 'Nil',
+        tmsWorksites: d => len(d.rows) + ' worksite(s) in TMS', pwiSites: d => (len(d.sheetSites) || len(d.sheet) || len(d.rows)) + ' worksite(s) in sheet'
+      };
+      const SDCOUNT = { gps: d => d.row ? 1 : 0, keymanGps: d => d.row ? 1 : 0, enggBlocks: d => (d.totals && (d.totals.demand || len(d.notAvailed))) ? 1 : 0, badRoad: d => d.row ? 1 : 0 };
+      const SD_ORDER = ['miniControl', 'pwiMc', 'gps', 'keymanGps', 'major', 'minor', 'tdcLapse', 'pqrsTdc', 'enggBlocks', 'machines', 'badRoad', 'tmsWorksites', 'pwiSites', 'usfd'];
+      const SD_TITLE = { miniControl: 'Mini control exceptions', pwiMc: 'PWI mini control exceptions', gps: 'Patrolman GPS defaulters', keymanGps: 'Keyman GPS defaulters', major: 'Major failures', minor: 'Minor failures', tdcLapse: 'Cautions past TDC', pqrsTdc: 'PQRS TDC fail', enggBlocks: 'Traffic blocks', machines: 'Machine utilisation', badRoad: 'Bad road surface at LC gates', tmsWorksites: 'Worksites in TMS', pwiSites: 'Worksites in sheet', usfd: 'USFD' };
+      const buildSrdenSecs = () => {
+        const merged = R.sections || {}; let no = 1;
+        SD_ORDER.forEach(key => {
+          const list = merged[key]; if (!list) return;
+          const title = (SD_TITLE[key] || key);
+          const count = SDCOUNT[key] || (d => len(d.rows) + len(d.entries) + len(d.tested));
+          const withData = list.filter(x => count(x.data) > 0);
+          if (!withData.length) { add(head(String(no++), title), [NOTE([['Nil for all AENs.', { italics: true, size: 18 }]])]); return; }
+          add(head(String(no++), title), [T([{ h: 'AEN' }, { h: 'Position', free: true }],
+            withData.map(x => ['AEN/' + x.aen, (SDL[key] || (() => '—'))(x.data)]), { size: 17, hsize: 17 })]);
+        });
+        // route time loss: the union of the Sr DEN's AENs' routes, each once (15a_RouteAen.gs, carried in each report)
+        const routes = {}; (merged.routeLoss || merged.routeTime || []).forEach(x => ((x.data && (x.data.routes || x.data.rows)) || []).forEach(r => { const k = r.route || r.name || JSON.stringify(r); if (!routes[k]) routes[k] = r; }));
+        const rk = Object.keys(routes);
+        if (rk.length) add(head(String(no++), 'Route time loss (union of the Sr DEN’s routes)'),
+          [T([{ h: 'Route' }, { h: 'Section' }, { h: 'Loss', a: 'c', one: true }],
+            rk.map(k => { const r = routes[k]; return [r.route || r.name || k, r.section || '', val(r.loss != null ? r.loss : r.min)]; }), { size: 17, hsize: 17 })]);
+        // division (IOW) items with no AEN, and the division machine idle line (§31.7 3d)
+        const div = R.division || {}, dparts = [];
+        (div.iow || []).forEach(it => dparts.push(NOTE([[(it.item || it.text || JSON.stringify(it)) + '.', { size: 18 }]])));
+        if (div.machineIdle) dparts.push(NOTE([['Division machines idle: ', { bold: true, size: 18 }], [typeof div.machineIdle === 'object' ? (div.machineIdle.text || len(div.machineIdle.rows) + ' machine(s)') : String(div.machineIdle), { size: 18 }]]));
+        if (dparts.length) add(head(String(no++), 'Division (IOW) items'), dparts);
+      };
+      if (SRDEN) buildSrdenSecs();
+
       SECS.forEach(sp => {
         sp.narrow = narrowOK(sp);
         sp.full = render(sp, W); sp.hFull = heightOf(sp.full, W);
@@ -978,7 +1048,10 @@
         const rows = entries.map(e => Rw([e.work, e.location, e.planned, e.what + (e.causeText ? ' — ' + e.causeText : ''), e.cause], nw, ['l', 'l', 'l', 'l', 'l'], { size: 16 }));
         return [title, table(nw, [H(['Work', 'Where', 'Planned', 'What happened', 'Cause'], nw, 16), ...rows])];
       })();
-      const head0 = [...letterhead('MORNING POSITION', nightTxt), abstract, ...abstractNote, ...notDoneBox];
+      const head0 = SRDEN
+        ? [...letterhead((R.srden || 'Sr DEN').toUpperCase() + ' · MORNING POSITION', 'AENs: ' + (R.aens || []).join(', ') + '. ' + nightTxt),
+           srdenSummaryTable(), ...srdenMissingNote(), ...srdenNotDoneTable()]
+        : [...letterhead('MORNING POSITION', nightTxt), abstract, ...abstractNote, ...notDoneBox];
       const packed = pack([]);
       // the layouts tried: the best pairing, and each of its pairs undone (rule 3 then lays both at full width)
       const ARR = [{ name: 'best pairing', cost: 0, rows: packed },
@@ -1259,7 +1332,7 @@
         characterSpacing: o.track ? px((o.px || 14) * o.track) : undefined });
       const img = (data, w, h) => data ? new ImageRun({ type: 'png', data, transformation: { width: w, height: h } }) : new TextRun('');
       // the stack under the seal: [gap above (px), line height (px), runs]
-      const name = ((R.office || '').match(/[,/]\s*([^,/(]+?)\s*\(/) || [, R.aen])[1].toUpperCase();
+      const name = SRDEN ? (R.srden || 'SR DEN').toUpperCase() : ((R.office || '').match(/[,/]\s*([^,/(]+?)\s*\(/) || [, R.aen])[1].toUpperCase();
       const day = new Date(D + 'T00:00:00Z'), MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
       const dateLong = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][day.getUTCDay()] + ', ' + day.getUTCDate() + ' ' + MONTHS[day.getUTCMonth()] + ' ' + day.getUTCFullYear();
       const d1 = R.period.day, dd = iso => iso.slice(8, 10) + '.' + iso.slice(5, 7);

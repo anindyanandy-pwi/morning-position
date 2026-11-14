@@ -30,7 +30,10 @@
   }
   async function displayBlob(R, spec) { return docxBlob(R, { displayPageBreaks: true, displaySpec: spec }); }
   function dmy_(iso) { return iso ? iso.split('-').reverse().join('.') : ''; }
-  function docxName(R) { return 'Morning_Position_AEN-' + String(R.aen).replace('/', '-') + '_' + dmy_(R.date) + '.docx'; }
+  function docxName(R) {
+    if (R && R.kind === 'srden') return 'Morning_Position_SrDEN-' + String(R.code || '').replace(/[^0-9A-Za-z]+/g, '') + '_' + dmy_(R.date) + '.docx';
+    return 'Morning_Position_AEN-' + String(R.aen).replace('/', '-') + '_' + dmy_(R.date) + '.docx';
+  }
   function saveBlob(blob, filename) {
     var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename;
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 30000);

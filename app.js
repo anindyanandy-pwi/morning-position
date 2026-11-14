@@ -92,24 +92,25 @@
   $('signOut').onclick = () => { call('signOut').catch(() => {}); signedOut('Signed out.'); $('msgEmail').className = 'msg'; };
 
   /* ---------- after sign-in ---------- */
-  const ROLE = { admin: 'Administrator', operator: 'Engg/CNL', aen: '' };
-  const VIEWS = ['vToday', 'vAen', 'vReports', 'vUsers', 'vSettings', 'vPlace', 'vData', 'vSources'];
+  const ROLE = { admin: 'Administrator', operator: 'Engg/CNL', aen: '', srden: '' };
+  const VIEWS = ['vToday', 'vAen', 'vSrden', 'vReports', 'vUsers', 'vSettings', 'vPlace', 'vData', 'vSources'];
   const MENU = { admin: [['vToday', 'Today'], ['vReports', 'Reports'], ['vUsers', 'Users'], ['vSettings', 'Settings'], ['vPlace', 'Placements'], ['vSources', 'Sources'], ['vData', 'Data and checks']],
                  operator: [['vToday', 'Today'], ['vReports', 'Reports'], ['vSources', 'Sources']] };
-  const LOAD = { vToday: () => loadToday(), vAen: () => loadAen(), vReports: () => loadReports(), vUsers: () => loadAdmin(), vSettings: () => loadAdmin(), vPlace: () => loadPlacements(), vData: () => loadAdmin(), vSources: () => loadSources() };
+  const LOAD = { vToday: () => loadToday(), vAen: () => loadAen(), vSrden: () => loadSrden(), vReports: () => loadReports(), vUsers: () => loadAdmin(), vSettings: () => loadAdmin(), vPlace: () => loadPlacements(), vData: () => loadAdmin(), vSources: () => loadSources() };
 
   async function start() {
     try { me = await call('me'); } catch (e) { if (session) signedOut(e.message); return; }
     $('signin').hidden = true; $('app').hidden = false;
-    $('who').textContent = (me.role === 'aen' ? 'AEN/' + me.aen : ROLE[me.role]) + ' · ' + me.email;
+    const whoName = me.role === 'aen' ? 'AEN/' + me.aen : me.role === 'srden' ? (me.srdenName || 'Sr DEN') : ROLE[me.role];
+    $('who').textContent = whoName + ' · ' + me.email;
     const items = MENU[me.role];
     $('menu').hidden = !items; $('menuItems').innerHTML = '';
     (items || []).forEach(([v, t]) => { const b = el('button', '', t); b.dataset.view = v; b.onclick = () => show(v); $('menuItems').appendChild(b); });
-    if (me.role !== 'aen') {
+    if (me.role === 'admin' || me.role === 'operator') {
       D = me.today; $('tPick').value = D;
       $('rAen').innerHTML = ''; me.offices.forEach(o => { const op = el('option', '', 'AEN/' + o.aen + ' · ' + town(o.office)); op.value = o.aen; $('rAen').appendChild(op); });
     }
-    show(me.role === 'aen' ? 'vAen' : 'vToday');
+    show(me.role === 'aen' ? 'vAen' : me.role === 'srden' ? 'vSrden' : 'vToday');
   }
   function show(v) {
     VIEWS.forEach(id => $(id).hidden = id !== v);
@@ -231,11 +232,12 @@
   // Which reports were already saved for the date is filled in quietly in the background.
   const fresh = {};         // aen -> saved in this page for date D (wins over the background answer)
   function blankDay() {
-    return { date: D, aens: me.offices.map(o => ({ aen: o.aen, office: o.office, count: 0, latest: null })), sources: null };
+    return { date: D, aens: me.offices.map(o => ({ aen: o.aen, office: o.office, count: 0, latest: null })), sources: null, srden: null };
   }
   async function loadToday() {
     if (!today || today.date !== D) { today = blankDay(); Object.keys(fresh).forEach(k => delete fresh[k]); }
     drawToday();
+    drawSrdenCards(); loadSrdenCards();          // §31.7: the five Sr DEN cards, filled in the background
     const asked = D;
     try {
       const t = await call('today', { date: asked });
@@ -309,6 +311,57 @@
     drawSources(today.sources);
     drawAutoLine(today.auto);
   }
+
+  /* ---------- Sr DEN cards on the Today page (§31.7, admin / Engg-CNL) ---------- */
+  let srdenBusy = false, srdenAfter = false;
+  const SR_SHORT = { HQ: 'Sr DEN · HQ', '1': 'Sr DEN · I', '2': 'Sr DEN · II', '3': 'Sr DEN · III', '4': 'Sr DEN · IV' };
+  async function loadSrdenCards() {
+    if (!canGenerate()) return;
+    const asked = D;
+    try {
+      const list = await call('srdenList', { date: asked });
+      if (asked !== D || !Array.isArray(list)) return;
+      today.srden = list; drawSrdenCards();
+    } catch (e) { console.warn('srdenList: ' + e.message); }
+  }
+  function drawSrdenCards() {
+    const box = $('sdCards'); if (!box) return;
+    box.innerHTML = '';
+    const list = today && today.srden;
+    if (!list) { box.appendChild(el('div', 'small', 'Reading…')); return; }
+    list.forEach(s => {
+      const made = s.latest, n = (s.aens || []).length;
+      const t = el('div', 'tile');
+      const meta = el('div', 'meta'); meta.append(el('span', '', n + ' AEN' + (n === 1 ? '' : 's')), el('span', '', made ? made.at : '—'));
+      t.append(meta, el('div', 'code', SR_SHORT[s.code] || s.srden), el('div', 'town', (s.aens || []).join(' · ')), el('div', 'st ' + (made ? 'ok' : 'wait'), made ? 'Ready' : 'Not prepared yet'));
+      const acts = el('div', 'acts');
+      if (made && !srdenBusy) {
+        const label = s.srden + ' · ' + dmy(made.date || D);
+        const v = el('button', 'btn-line', 'View'); v.onclick = () => srdenPreview(made.name, v, label, s.code);
+        const dl = el('button', 'btn-line', 'Download'); dl.onclick = () => srdenDownload(made.name, dl, s.code);
+        acts.append(v, dl);
+      }
+      t.appendChild(acts); box.appendChild(t);
+    });
+  }
+  // §31.7: build all five Sr DEN reports from the saved AEN reports; each names any AEN with no report.
+  async function generateSrdenRun() {
+    if (srdenBusy) return;
+    srdenBusy = true; drawSrdenCards();
+    const btn = $('genSrden'); if (btn) { btn.disabled = true; btn.textContent = 'Generating Sr DEN…'; }
+    try {
+      const res = (await call('generateSrden', { date: D })).results || [];
+      const bad = res.filter(r => !r.saved);
+      const miss = res.filter(r => (r.missing || []).length).map(r => r.srden + ' (no report from ' + r.missing.join(', ') + ')');
+      if (bad.length) tell('Sr DEN: ' + bad.length + ' could not be built — ' + bad.map(r => r.srden + ': ' + r.error).join('; '), 'err');
+      else tell('Sr DEN reports ready.' + (miss.length ? ' Missing AEN reports — ' + miss.join('; ') : ''), 'ok');
+      await loadSrdenCards();
+    } catch (e) { tell(e.message, 'err'); }
+    srdenBusy = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Generate Sr DEN reports'; }
+    drawSrdenCards();
+  }
+
   // §24.2: "Made automatically 09:00 · next check 09:30" / "last automatic check done" / "Automatic reports are off"
   function drawAutoLine(au) {
     const line = $('autoLine'); if (!line) return;
@@ -379,8 +432,14 @@
   $('whyClose').onclick = () => $('why').close();
   // "Generate all ten" reads every source once (the batch store, §19) and then builds the ten from it.
   // While it runs the same button is Stop. A single tile's Generate / Generate again reads fresh (no batch).
-  $('genAll').onclick = () => { if (Object.keys(busy).length || preparing) stopAll(); else runQueue(today.aens.map(a => a.aen), true); };
+  $('genAll').onclick = () => {
+    if (Object.keys(busy).length || preparing) { stopAll(); return; }
+    srdenAfter = true;                                   // §31.7: the ten offices, then the five Sr DEN reports
+    runQueue(today.aens.map(a => a.aen), true).then(() => { if (srdenAfter && canGenerate()) generateSrdenRun(); });
+  };
+  $('genSrden').onclick = () => generateSrdenRun();
   function stopAll() {
+    srdenAfter = false;                                  // Stop cancels the Sr DEN step that would have followed
     stopping = true;                                     // start no more offices
     Object.keys(busy).forEach(a => { if (busy[a] === 'queue') delete busy[a]; });   // waiting ones go back to "Not prepared yet"
     drawToday();                                         // offices already running finish on their own
@@ -480,6 +539,79 @@
       }
       drawList($('aList'), h, me.aen, true);
     } catch (e) { tb.innerHTML = ''; tell(e.message, 'err'); }
+  }
+
+  /* ---------- Sr DEN office (§31.7): its own reports only ---------- */
+  const snapAt = name => name && name.length >= 15 ? name.slice(11, 13) + ':' + name.slice(13, 15) : '';
+  // the saved Sr DEN report (today's latest, or the named one). `code` is passed only by admin/Engg-CNL (its own
+  // account's Sr DEN is implied by the role). Rejects (with .missing) when none is saved.
+  async function srdenFetch(name, code) {
+    const j = await call('srdenReport', Object.assign(code ? { code } : {}, name ? { name } : {}));
+    if (!j || !j.report) { const e = new Error('This report is not prepared yet.'); e.missing = true; throw e; }
+    return j.report;
+  }
+  async function srdenPreview(name, btn, label, code) {
+    if (btn) btn.disabled = true;
+    openPreview(label);
+    let R;
+    try { R = await srdenFetch(name, code); }
+    catch (e) { previewFail(e.missing ? e.message : 'Could not fetch the report: ' + e.message, null, name); if (btn) btn.disabled = false; return; }
+    try { pvReport = R; pvBlob = await docxBlob(R); $('pvDl').disabled = false; await renderPreview(pvBlob); }
+    catch (e) { console.error(e); previewFail('Could not show the report on screen: ' + (e && e.message || e), R, name); }
+    if (btn) btn.disabled = false;
+  }
+  async function srdenDownload(name, btn, code) {
+    if (btn) btn.disabled = true;
+    const host = btn && btn.parentNode; let note = host ? host.querySelector('.dl-err') : null; if (note) note.remove();
+    let R;
+    try { R = await srdenFetch(name, code); }
+    catch (e) { fail(e.missing ? e.message : 'Could not fetch the report: ' + e.message); if (btn) btn.disabled = false; return; }
+    try { await saveDocx(R); } catch (e) { console.error(e); fail('Could not build the Word file: ' + (e && e.message || e)); }
+    if (btn) btn.disabled = false;
+    function fail(text) { tell(text, 'err'); if (host) { note = el('div', 'small err dl-err', text); host.appendChild(note); } }
+  }
+  function drawSrdenList(box, snaps) {
+    box.innerHTML = '';
+    const head = el('div', 'lrow head'); head.append(el('span', '', 'No.'), el('span', '', 'Report date'), el('span', 'hide-sm', 'Prepared'), el('span', ''));
+    box.appendChild(head);
+    const rows = (snaps || []).filter(s => s.date !== me.today);   // today's latest is shown above
+    if (!rows.length) { box.appendChild(el('div', 'empty', 'No earlier reports yet.')); return; }
+    rows.slice(0, 60).forEach((s, i) => {
+      const r = el('div', 'lrow');
+      const d = el('span', ''); d.style.fontWeight = '500'; d.textContent = dmy(s.date) + ' ';
+      const label = (me.srdenName || 'Sr DEN') + ' · ' + dmy(s.date);
+      const v = el('button', 'btn-line', 'View'); v.onclick = () => srdenPreview(s.name, v, label);
+      const b = el('button', 'btn-line', 'Download'); b.onclick = () => srdenDownload(s.name, b);
+      const end = el('span', 'end'); end.append(v, b);
+      const when = el('span', 'mono hide-sm'); when.textContent = s.at;
+      r.append(el('span', 'no', two(i + 1)), d, when, end);
+      box.appendChild(r);
+    });
+  }
+  async function loadSrden() {
+    $('sdName').textContent = me.srdenName || 'Sr DEN';
+    const tb = $('sdToday'); tb.innerHTML = ''; tb.appendChild(el('div', 'small', 'Reading…'));
+    try {
+      const r = await call('srdenReport', {});                      // today's latest, or missing
+      tb.innerHTML = '';
+      const info = el('div'); info.append(el('div', 'label', 'Today'), el('div', 'd', dotted(me.today)));
+      if (r && r.report) {
+        const R = r.report, miss = (R.missing || []), old = (R.older || []);
+        const label = (me.srdenName || 'Sr DEN') + ' · ' + dmy(R.date);
+        info.appendChild(el('div', 'small', 'Ready since ' + snapAt(r.snapshot) + ' · ' + (R.aens || []).length + ' AEN' + ((R.aens || []).length === 1 ? '' : 's') + ' · Word file'));
+        if (miss.length) info.appendChild(el('div', 'small err', 'No report yet from: ' + miss.join(', ')));
+        if (old.length) info.appendChild(el('div', 'small', 'Older data used for: ' + old.join(', ')));
+        const v = el('button', 'btn-line', 'View'); v.onclick = () => srdenPreview(r.snapshot, v, label);
+        const b = el('button', 'btn', 'Download report'); b.onclick = () => srdenDownload(r.snapshot, b);
+        const acts = el('div', 'acts'); acts.append(v, b);
+        tb.append(info, acts);
+      } else {
+        info.appendChild(el('div', 'small', 'Not prepared yet. Engg/CNL prepares it each morning; please check again shortly.'));
+        tb.appendChild(info);
+      }
+    } catch (e) { tb.innerHTML = ''; tell(e.message, 'err'); return; }
+    try { drawSrdenList($('sdList'), (await call('srdenHistory', {})).snapshots); }
+    catch (e) { tell(e.message, 'err'); }
   }
 
   /* ---------- reports (Engg/CNL and admin) ---------- */
@@ -797,18 +929,27 @@
       const tr = el('tr');
       const email = Object.assign(el('input', 'field'), { type: 'email', value: u.email || '', placeholder: 'email' }); email.setAttribute('aria-label', 'Email');
       const role = el('select', 'field'); role.setAttribute('aria-label', 'Role');
-      [['aen', 'AEN office (download)'], ['operator', 'Engg/CNL (prepare)']].forEach(([v, t]) => { const o = el('option', '', t); o.value = v; o.selected = (u.role || 'aen') === v; role.appendChild(o); });
+      [['aen', 'AEN office (download)'], ['operator', 'Engg/CNL (prepare)'], ['srden', 'Sr DEN (download)']].forEach(([v, t]) => { const o = el('option', '', t); o.value = v; o.selected = (u.role || 'aen') === v; role.appendChild(o); });
       const aen = el('select', 'field'); aen.setAttribute('aria-label', 'AEN');
-      const ch = el('option', '', 'Choose'); ch.value = ''; aen.appendChild(ch);
+      const ch = el('option', '', 'Choose AEN'); ch.value = ''; aen.appendChild(ch);
       me.offices.forEach(o => { const op = el('option', '', 'AEN/' + o.aen); op.value = o.aen; op.selected = o.aen === u.aen; aen.appendChild(op); });
+      const srden = el('select', 'field'); srden.setAttribute('aria-label', 'Sr DEN'); srden.style.marginTop = '6px';
+      const sch = el('option', '', 'Choose Sr DEN'); sch.value = ''; srden.appendChild(sch);
+      (me.srdens || []).forEach(s => { const op = el('option', '', s.name); op.value = s.code; op.selected = s.code === u.srden; srden.appendChild(op); });
+      const who = el('div'); who.append(aen, srden);                 // one cell holds the AEN or the Sr DEN picker, by role
       const name = Object.assign(el('input', 'field'), { value: u.name || '' }); name.setAttribute('aria-label', 'Name or post');
       const act = Object.assign(el('input'), { type: 'checkbox', checked: u.active !== false }); act.setAttribute('aria-label', 'Active');
       const del = el('button', 'btn-text', 'Remove'); del.style.color = 'var(--bad)';
-      const sync = () => { aen.disabled = role.value === 'operator'; if (aen.disabled) aen.value = ''; }; role.onchange = sync; sync();
-      const keep = () => Object.assign(u, { email: email.value.trim(), role: role.value, aen: aen.value, name: name.value.trim(), active: act.checked });
-      [email, role, aen, name, act].forEach(x => x.addEventListener('change', keep));
+      const sync = () => {
+        const r = role.value;
+        aen.hidden = aen.disabled = r !== 'aen'; srden.hidden = srden.disabled = r !== 'srden';
+        if (r !== 'aen') aen.value = ''; if (r !== 'srden') srden.value = '';
+      };
+      role.onchange = sync; sync();
+      const keep = () => Object.assign(u, { email: email.value.trim(), role: role.value, aen: aen.value, srden: srden.value, name: name.value.trim(), active: act.checked });
+      [email, role, aen, srden, name, act].forEach(x => x.addEventListener('change', keep));
       del.onclick = () => { users.splice(i, 1); drawUsers(); };
-      [email, role, aen, name, act, del].forEach(x => { const td = el('td'); td.appendChild(x); tr.appendChild(td); });
+      [email, role, who, name, act, del].forEach(x => { const td = el('td'); td.appendChild(x); tr.appendChild(td); });
       tb.appendChild(tr);
     });
   }

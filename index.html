@@ -9,18 +9,18 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif:ital,wght@0,500;0,600;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="apple-touch-icon" href="ir-logo-180.png">
-<link rel="stylesheet" href="style.css?v=bb688e4">
-<script src="config.js?v=bb688e4"></script>
-<script src="vendor/docx-9.8.1.iife.js?v=bb688e4"></script>
-<script src="vendor/jszip-3.10.1.min.js?v=bb688e4"></script>
+<link rel="stylesheet" href="style.css?v=c5e3a29">
+<script src="config.js?v=c5e3a29"></script>
+<script src="vendor/docx-9.8.1.iife.js?v=c5e3a29"></script>
+<script src="vendor/jszip-3.10.1.min.js?v=c5e3a29"></script>
 <!-- docx-preview (§24.1 preview) shares the global name "docx" with the generator above and reads window.JSZip.
      Keep the generator as window.docx and expose the preview renderer as window.docxPreview. -->
 <script>window.__docxGen = window.docx;</script>
-<script src="vendor/docx-preview-0.3.5.min.js?v=bb688e4"></script>
+<script src="vendor/docx-preview-0.3.5.min.js?v=c5e3a29"></script>
 <script>window.docxPreview = window.docx; window.docx = window.__docxGen; delete window.__docxGen;</script>
-<script src="docx-compat.js?v=bb688e4"></script>
-<script src="report-docx.js?v=6f13bec"></script>
-<script src="docx-build.js?v=0042986"></script>
+<script src="docx-compat.js?v=c5e3a29"></script>
+<script src="report-docx.js?v=c5e3a29"></script>
+<script src="docx-build.js?v=c5e3a29"></script>
 </head>
 <body>
 
@@ -112,6 +112,11 @@
           <p class="aside-note">Each report is saved for its AEN office the moment it is ready, and kept exactly as prepared. Keep this page open while all ten are being prepared.</p>
         </aside>
       </div>
+      <section style="margin-top:26px">
+        <div class="sec-head"><h2>Sr DEN reports</h2><button class="btn-line" id="genSrden" style="min-height:40px">Generate Sr DEN reports</button></div>
+        <p class="small" style="margin:6px 0 12px">Each Sr DEN report is the sum of its AENs' reports. Generate the ten offices first; “Generate all ten” makes these straight after.</p>
+        <div class="tiles" id="sdCards"></div>
+      </section>
     </div>
 
     <!-- AEN office -->
@@ -127,6 +132,22 @@
         <h2 class="h2" style="margin-bottom:12px">Earlier reports</h2>
         <div id="aList"></div>
         <p class="aside-note" style="margin-top:18px">Prepared by Engg/CNL.</p>
+      </section>
+    </div>
+
+    <!-- Sr DEN office (§31.7): its own reports only -->
+    <div id="vSrden" hidden>
+      <section class="hero">
+        <div>
+          <div class="label">Sr DEN · Morning position</div>
+          <div class="serif" style="font-size:clamp(30px,5vw,46px);font-weight:700;line-height:1.08;margin-top:8px" id="sdName"></div>
+        </div>
+        <div class="today-box" id="sdToday"></div>
+      </section>
+      <section class="list" style="padding-top:26px">
+        <h2 class="h2" style="margin-bottom:12px">Earlier reports</h2>
+        <div id="sdList"></div>
+        <p class="aside-note" style="margin-top:18px">Built from the AEN reports by Engg/CNL.</p>
       </section>
     </div>
 
@@ -147,11 +168,11 @@
       </div>
       <div class="table-box">
         <table class="t">
-          <thead><tr><th>Email</th><th style="width:210px">Role</th><th style="width:150px">AEN</th><th style="width:200px">Name / post</th><th style="width:70px">Active</th><th style="width:80px"></th></tr></thead>
+          <thead><tr><th>Email</th><th style="width:210px">Role</th><th style="width:190px">AEN / Sr DEN</th><th style="width:200px">Name / post</th><th style="width:70px">Active</th><th style="width:80px"></th></tr></thead>
           <tbody id="usersBody"></tbody>
         </table>
       </div>
-      <p class="small" style="margin-top:14px"><b>Administrator</b> everything, including these pages · <b>Engg/CNL</b> prepares and sees reports of all AENs · <b>AEN office</b> downloads its own reports</p>
+      <p class="small" style="margin-top:14px"><b>Administrator</b> everything, including these pages · <b>Engg/CNL</b> prepares and sees reports of all AENs · <b>AEN office</b> downloads its own reports · <b>Sr DEN</b> downloads its own Sr DEN report (the sum of its AENs)</p>
     </div>
 
     <!-- admin: settings -->
@@ -238,6 +259,6 @@
   <div id="whyBody"></div>
 </dialog>
 
-<script src="app.js?v=735ceba"></script>
+<script src="app.js?v=c5e3a29"></script>
 </body>
 </html>

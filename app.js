@@ -30,6 +30,9 @@
     let j;
     // a 200 whose body is not JSON is Google's 6-minute kill page, not a reachability problem (spec §19 item 6)
     try { j = await r.json(); } catch (e) { throw new Error('The server took more than 6 minutes and was stopped — Generate again.'); }
+    // 15.11 live: a reply that is a bare list (srdenList on server c5e3a29) loses the server's "ok" mark in JSON —
+    // a list is a good answer; the server wraps lists from the next deploy ({ list: [...] })
+    if (Array.isArray(j)) return j;
     if (!j.ok) {
       if (/sign in again|Please sign in|no longer registered|expired\. Please/.test(j.error || '') && fn !== 'otpVerify') signedOut(j.error);
       throw new Error(j.error || 'Server error');
@@ -319,7 +322,7 @@
     if (!canGenerate()) return;
     const asked = D;
     try {
-      const list = await call('srdenList', { date: asked });
+      const got = await call('srdenList', { date: asked }), list = Array.isArray(got) ? got : got && got.list;
       if (asked !== D || !Array.isArray(list)) return;
       today.srden = list; drawSrdenCards();
     } catch (e) { console.warn('srdenList: ' + e.message); }

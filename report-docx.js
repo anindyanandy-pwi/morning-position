@@ -197,15 +197,20 @@
           cell([para([logoRun], { align: C })], lw[1], { borders: { top: rule(12), bottom: nb, left: nb, right: nb } }),
           cell([para([new TextRun({ text: 'EASTERN RAILWAY', font: 'Arial Narrow', size: 44, bold: true })], { align: RT })], lw[2], { borders: { top: rule(12), bottom: nb, left: nb, right: nb } })] }),
         TR({ height: EX(380), children: [
-          cell([para([hrun(HINDI_OFFICE[R.aen] + ' का कार्यालय, हावड़ा मंडल', { size: 19 })], { align: C })], W, { span: 3, borders: { top: rule(6), bottom: nb, left: nb, right: nb } })] }),
+          cell([para([hrun(SRDEN ? 'वरिष्ठ मंडल अभियंता, हावड़ा मंडल' : HINDI_OFFICE[R.aen] + ' का कार्यालय, हावड़ा मंडल', { size: 19 })], { align: C })], W, { span: 3, borders: { top: rule(6), bottom: nb, left: nb, right: nb } })] }),
         TR({ height: EX(360), children: [
-          cell([para([run('Office of the ' + R.office + ', Howrah Division', { size: 19, bold: true })], { align: C })], W, { span: 3, borders: { top: nb, bottom: rule(12), left: nb, right: nb } })] })
+          cell([para([run('Office of the ' + (SRDEN ? R.srden : R.office) + ', Howrah Division', { size: 19, bold: true })], { align: C })], W, { span: 3, borders: { top: nb, bottom: rule(12), left: nb, right: nb } })] })
       ], { keep: false });
+      // §31.7: on a Sr DEN report the office has no "Units"; its AENs (with towns) are named on the sub line instead
+      const srdenAenLine = () => 'AENs: ' + (R.aenList && R.aenList.length
+        ? R.aenList.map(a => 'AEN/' + a.aen + (a.town ? ' (' + a.town + ')' : '')).join(' · ')
+        : (R.aens || []).map(a => 'AEN/' + a).join(' · '));
       const letterhead = (title, sub) => [
         mast,
         ...(title && title !== 'MORNING POSITION' ? [para([run(title, { bold: true, underline: true, size: 26 })], { align: C, before: 120 })] : []),
         ...(sub ? [para([run(sub, { size: 18, italics: true })], { align: C, before: 60 })] : []),
-        para([run('Units: ' + R.units.map(u => 'SSE/P.Way/' + u).join(', '), { size: 19 })], { before: 80, after: 60 })
+        SRDEN ? para([run(srdenAenLine(), { size: 19 })], { before: 80, after: 60 })
+              : para([run('Units: ' + R.units.map(u => 'SSE/P.Way/' + u).join(', '), { size: 19 })], { before: 80, after: 60 })
       ];
 
       /* ---------- abstract ---------- */
@@ -247,7 +252,8 @@
       const ERRP = s => NOTE([['Could not be read: ', { bold: true, size: 18 }], [s.error, { italics: true, size: 18 }]]);
       const head = (no, title, note, late) => ({ no, title, note, late });
       const SECS = [];
-      const add = (h, parts, o = {}) => SECS.push(Object.assign({ head: h, parts, secs: o.secs || [h.no] }, o));
+      let COLLECT = SECS;                              // add() appends here; a Sr DEN report swaps it per AEN (below)
+      const add = (h, parts, o = {}) => COLLECT.push(Object.assign({ head: h, parts, secs: o.secs || [h.no] }, o));
       // every item of the list is in every report; a section whose source is not connected yet says so in one line
       const PENDING = what => NOTE([['To be added: ', { bold: true, size: 18 }], [what + '.', { italics: true, size: 18 }]]);
 
@@ -271,15 +277,22 @@
         });
         return (kv.length ? [SUB(label), KV(kv)] : []).concat(out);
       };
+      // §31.7: the whole section pass, as a function of one report's sections (S) and its envelope (R). It runs once for
+      // an AEN report, and once per AEN for a Sr DEN report (the same renderers, called with one AEN's data). add()
+      // targets COLLECT, which the Sr DEN body swaps to a per-AEN array. ok/old/wantNight shadow the outer ones (the
+      // abstract still uses those) so every guard reads the report being processed.
+      const runGuards = (S, R) => {
+      const ok = k => S[k] && S[k].ok;
+      const old = k => ok(k) && !!S[k].stale;
+      const wantNight = nightOf(R.period.night.split('/')[0], D);
       const FAILED = [];
       const guard = (no, title, keys, fn) => {
-        if (SRDEN) return;                             // §31.7: a Sr DEN report builds its own (merged) sections below
-        const n0 = SECS.length;
-        try { fn(); return; } catch (e) { SECS.length = n0; FAILED.push({ no, error: (e && e.message) || String(e) }); }
+        const n0 = COLLECT.length;
+        try { fn(); return; } catch (e) { COLLECT.length = n0; FAILED.push({ no, error: (e && e.message) || String(e) }); }
         const line = NOTE([['This section was laid out differently when this report was made (' + dmy(D) + ') — shown as saved.', { italics: true, size: 18 }]]);
         const o = no === '7–8' ? { secs: [7, 8] } : {};
         try { add(head(no, title), [line, ...keys.filter(k => S[k]).flatMap(k => savedParts(k, S[k], 0))], o); }
-        catch (e2) { SECS.length = n0; add(head(no, title), [line], o); }
+        catch (e2) { COLLECT.length = n0; add(head(no, title), [line], o); }
       };
 
       /* 1. mini control exceptions: AEN items (tab 46), PWI items (tab 47), IOW items (spec §14 item 1) */
@@ -805,6 +818,8 @@
       if (new Date(D + 'T00:00:00Z').getUTCDay() === 6)
         add(head(21, 'Weekly position'), [NOTE([['Paused: ', { bold: true, size: 18 }], ['the Saturday weekly position is to be designed.', { italics: true, size: 18 }]])]);
       });
+      };   // end runGuards
+      if (!SRDEN) runGuards(S, R);        // an AEN report: run the section pass once, on this report
 
       /* ======================= the layout engine =======================
          1. Width class from the content: a section is narrow when its widest natural line (a heading or a cell, unwrapped)
@@ -961,45 +976,73 @@
         return [title, table(nw, [H(['AEN', 'Work', 'Planned', 'What happened', 'Cause'], nw, 16)].concat(
           es.map(e => Rw(['AEN/' + e.aen, e.work, e.planned, e.what + (e.causeText ? ' — ' + e.causeText : ''), e.cause], nw, ['l', 'l', 'l', 'l', 'l'], { size: 16 }))))];
       };
-      // one concise line per AEN per section (the summary page above carries the figures); Nil-for-all collapses to a line
-      const SDL = {
-        miniControl: d => len(d.rows) + ' exception(s)', pwiMc: d => len(d.rows) + ' PWI exception(s)',
-        gps: d => d.row ? d.row.defaulters + ' defaulter(s) / ' + d.row.total + ' batches' : 'Nil',
-        keymanGps: d => d.row ? d.row.defaulters + ' defaulter(s) / ' + d.row.total + ' batches' : 'Nil',
-        major: d => len(d.rows) + ' major failure(s)', minor: d => len(d.rows) + ' minor failure(s)',
-        tdcLapse: d => len(d.rows) + ' caution(s) past TDC', pqrsTdc: d => len(d.rows) + ' PQRS TDC fail',
-        enggBlocks: d => d.totals ? (d.totals.demand || 0) + ' min demanded, ' + (d.totals.availed || 0) + ' availed, ' + len(d.notAvailed) + ' not availed' : 'Nil',
-        machines: d => len(d.rows) + ' worked, ' + len(d.lost) + ' idle', usfd: d => len(d.tested) + ' tested',
-        badRoad: d => d.row ? d.row.total + ' LCs (' + (d.row.lcGates ? d.row.lcGates.length : 0) + ' gate nos.)' : 'Nil',
-        tmsWorksites: d => len(d.rows) + ' worksite(s) in TMS', pwiSites: d => (len(d.sheetSites) || len(d.sheet) || len(d.rows)) + ' worksite(s) in sheet'
+      // §31.7 (15.11): the Sr DEN report shows the SAME sections as an AEN report, numbered the same, each ONCE; under
+      // each, every one of the Sr DEN's AENs with its own full table(s) — rendered by the AEN section renderers above
+      // (runGuards), not a one-line count. An AEN with nothing in a section gets "AEN/x: Nil"; a section Nil for all its
+      // AENs collapses to one line. Route time loss is the union of the AENs' routes once, then each AEN's cautions.
+      const SRDEN_SECTIONS = [[1, 'Mini control exceptions'], [2, 'Winter patrolling'], [3, 'Failures'],
+        [4, 'Cautions in the section and TDC overdue'], [5, 'Speed restrictions in force'], [6, 'Bad road surface at LC gates'],
+        [13, 'Blocks availed and output'], [14, 'Machine utilisation'], [16, 'USFD testing and flaws'],
+        [19, 'Worksite entry in TMS'], [20, 'Worksite safety arrangement']];
+      const srdenNilRe = /^(nil|none|–|-|season not started|no route|no worksite|not applicable|no entry|all planned|nothing|no block|no machine)/i;
+      // a section has real content for an AEN when it carries a table with body rows, a sub-heading, or a key–value line
+      // whose value is not itself "Nil"/"none"/…
+      const srdenHasContent = parts => (parts || []).some(p =>
+        (p.t === 'table' && (p.rows || []).length && !(p.rows.length === 1 && p.rows[0].length === 1 && p.rows[0][0] && p.rows[0][0].span)) ||
+        (p.t === 'kv' && (p.rows || []).some(r => !srdenNilRe.test(String((r && r[1]) == null ? '' : r[1])))) ||
+        p.t === 'sub');
+      const srdenAenNil = aen => NOTE([['AEN/' + aen + ': ', { bold: true, size: 18 }], ['Nil', { italics: true, size: 18 }]]);
+      // the route sub-part of an AEN's section 5 (dropped for the Sr DEN, where the routes are unioned once above)
+      const srdenDropRoute = ps => { const out = []; for (let i = 0; i < ps.length; i++) { const p = ps[i];
+        if (p.t === 'sub' && /^Route time loss/.test(p.text)) { i++; continue; }
+        if (p.t === 'kv' && (p.rows || []).some(r => /^Route time loss/.test(String(r[0])))) continue;
+        out.push(p); } return out; };
+      const buildSrdenRoute = reports => {
+        const seen = {}, routes = [], d1 = v => v === null || v === undefined || v === '' ? '–' : (typeof v === 'number' ? v.toFixed(1) : String(v));
+        (R.aenReports || []).forEach(ar => { const sp = ar.R && ar.R.sections && ar.R.sections.speed;
+          if (sp && sp.ok !== false && Array.isArray(sp.routes)) sp.routes.filter(r => r.mine).forEach(r => {
+            const k = (r.route || '') + '|' + (r.lines || ''); if (!seen[k]) { seen[k] = 1; routes.push(r); } }); });
+        const parts = [];
+        if (routes.length) { parts.push(SUB('Route time loss — union of the Sr DEN’s routes (each route once)'));
+          parts.push(T([{ h: 'Route' }, { h: 'Lines', a: 'c' }, { h: 'ETA (min)', a: 'c', one: true }, { h: 'Actual (min)', a: 'c', one: true }, { h: 'Excess now', a: 'c', one: true }, { h: 'Excess last wk', a: 'c', one: true }],
+            routes.map(r => [r.route, r.lines, d1(r.eta), d1(r.actual),
+              r.excessRed ? { v: d1(r.excessNow), a: 'c', bold: true, color: 'C00000' } : { v: d1(r.excessNow), a: 'c' }, d1(r.excessLastWeek)]), { size: 17, hsize: 17 }));
+        } else parts.push(KV([['Route time loss', 'no route through this Sr DEN’s AENs in the file summary']]));
+        // each AEN's work (temporary) and permanent cautions, under its sub-heading (the route table above is shared)
+        reports.forEach(rep => { const rest = srdenDropRoute(rep.secs.filter(sp => sp.head.no === 5).flatMap(sp => sp.parts || []));
+          if (srdenHasContent(rest)) { parts.push(SUB('AEN/' + rep.aen)); parts.push(...rest); }
+          else parts.push(NOTE([['AEN/' + rep.aen + ': ', { bold: true, size: 18 }], ['no cautions in the caution file', { italics: true, size: 18 }]])); });
+        add(head('5', 'Speed restrictions in force'), parts);
       };
-      const SDCOUNT = { gps: d => d.row ? 1 : 0, keymanGps: d => d.row ? 1 : 0, enggBlocks: d => (d.totals && (d.totals.demand || len(d.notAvailed))) ? 1 : 0, badRoad: d => d.row ? 1 : 0 };
-      const SD_ORDER = ['miniControl', 'pwiMc', 'gps', 'keymanGps', 'major', 'minor', 'tdcLapse', 'pqrsTdc', 'enggBlocks', 'machines', 'badRoad', 'tmsWorksites', 'pwiSites', 'usfd'];
-      const SD_TITLE = { miniControl: 'Mini control exceptions', pwiMc: 'PWI mini control exceptions', gps: 'Patrolman GPS defaulters', keymanGps: 'Keyman GPS defaulters', major: 'Major failures', minor: 'Minor failures', tdcLapse: 'Cautions past TDC', pqrsTdc: 'PQRS TDC fail', enggBlocks: 'Traffic blocks', machines: 'Machine utilisation', badRoad: 'Bad road surface at LC gates', tmsWorksites: 'Worksites in TMS', pwiSites: 'Worksites in sheet', usfd: 'USFD' };
-      const buildSrdenSecs = () => {
-        const merged = R.sections || {}; let no = 1;
-        SD_ORDER.forEach(key => {
-          const list = merged[key]; if (!list) return;
-          const title = (SD_TITLE[key] || key);
-          const count = SDCOUNT[key] || (d => len(d.rows) + len(d.entries) + len(d.tested));
-          const withData = list.filter(x => count(x.data) > 0);
-          if (!withData.length) { add(head(String(no++), title), [NOTE([['Nil for all AENs.', { italics: true, size: 18 }]])]); return; }
-          add(head(String(no++), title), [T([{ h: 'AEN' }, { h: 'Position', free: true }],
-            withData.map(x => ['AEN/' + x.aen, (SDL[key] || (() => '—'))(x.data)]), { size: 17, hsize: 17 })]);
+      const buildSrdenBody = () => {
+        // run the AEN section pass once per AEN, each into its own array, so every AEN's full tables are available
+        const reports = (R.aenReports || []).map(ar => {
+          const Rx = Object.assign({}, ar.R);
+          if (!Rx.period || !Rx.period.day || !Rx.period.night) { const d1 = new Date(Rx.date + 'T00:00:00Z'); d1.setUTCDate(d1.getUTCDate() - 1);
+            const p = isNaN(d1) ? Rx.date : d1.toISOString().slice(0, 10); Rx.period = { day: p, night: p + '/' + Rx.date }; }
+          if (!Array.isArray(Rx.units)) Rx.units = [];
+          const into = [], prev = COLLECT; COLLECT = into; runGuards(Rx.sections || {}, Rx); COLLECT = prev;
+          return { aen: ar.aen, stale: ar.stale, secs: into };
         });
-        // route time loss: the union of the Sr DEN's AENs' routes, each once (15a_RouteAen.gs, carried in each report)
-        const routes = {}; (merged.routeLoss || merged.routeTime || []).forEach(x => ((x.data && (x.data.routes || x.data.rows)) || []).forEach(r => { const k = r.route || r.name || JSON.stringify(r); if (!routes[k]) routes[k] = r; }));
-        const rk = Object.keys(routes);
-        if (rk.length) add(head(String(no++), 'Route time loss (union of the Sr DEN’s routes)'),
-          [T([{ h: 'Route' }, { h: 'Section' }, { h: 'Loss', a: 'c', one: true }],
-            rk.map(k => { const r = routes[k]; return [r.route || r.name || k, r.section || '', val(r.loss != null ? r.loss : r.min)]; }), { size: 17, hsize: 17 })]);
-        // division (IOW) items with no AEN, and the division machine idle line (§31.7 3d)
+        SRDEN_SECTIONS.forEach(([no, title]) => {
+          if (no === 5) { buildSrdenRoute(reports); return; }
+          const any = reports.some(rep => { const es = rep.secs.filter(sp => sp.head.no === no); return es.length && srdenHasContent(es.flatMap(sp => sp.parts || [])); });
+          if (!any) { add(head(String(no), title), [NOTE([['Nil for all AENs.', { italics: true, size: 18 }]])]); return; }
+          const parts = [];
+          reports.forEach(rep => {
+            const flat = rep.secs.filter(sp => sp.head.no === no).flatMap(sp => sp.parts || []);
+            if (srdenHasContent(flat)) { parts.push(SUB('AEN/' + rep.aen)); parts.push(...flat); }
+            else parts.push(srdenAenNil(rep.aen));
+          });
+          add(head(String(no), title), parts);
+        });
+        // division (IOW) items with no AEN, and the division machine-idle line (§31.7 3d), at the end
         const div = R.division || {}, dparts = [];
         (div.iow || []).forEach(it => dparts.push(NOTE([[(it.item || it.text || JSON.stringify(it)) + '.', { size: 18 }]])));
         if (div.machineIdle) dparts.push(NOTE([['Division machines idle: ', { bold: true, size: 18 }], [typeof div.machineIdle === 'object' ? (div.machineIdle.text || len(div.machineIdle.rows) + ' machine(s)') : String(div.machineIdle), { size: 18 }]]));
-        if (dparts.length) add(head(String(no++), 'Division (IOW) items'), dparts);
+        if (dparts.length) add(head('Div', 'Division (IOW) items'), dparts);
       };
-      if (SRDEN) buildSrdenSecs();
+      if (SRDEN) buildSrdenBody();
 
       SECS.forEach(sp => {
         sp.narrow = narrowOK(sp);
@@ -1049,7 +1092,7 @@
         return [title, table(nw, [H(['Work', 'Where', 'Planned', 'What happened', 'Cause'], nw, 16), ...rows])];
       })();
       const head0 = SRDEN
-        ? [...letterhead((R.srden || 'Sr DEN').toUpperCase() + ' · MORNING POSITION', 'AENs: ' + (R.aens || []).join(', ') + '. ' + nightTxt),
+        ? [...letterhead((R.srden || 'Sr DEN').toUpperCase() + ' · MORNING POSITION', nightTxt),
            srdenSummaryTable(), ...srdenMissingNote(), ...srdenNotDoneTable()]
         : [...letterhead('MORNING POSITION', nightTxt), abstract, ...abstractNote, ...notDoneBox];
       const packed = pack([]);
@@ -1342,8 +1385,11 @@
         [12, 64, [t('Morning Position', { px: 57.3, font: SERIF, bold: true })]],
         [0, 30, [t('प्रातःकालीन स्थिति', { px: 20, font: HIN, bold: true })]],
         [14, 12, [img(art.rule, 400, 12)]],
-        [14, 22, [t('AEN/' + R.aen + ' · ' + name, { px: 18, bold: true, track: 0.08 })]],
-        [3, 18, [t('Units: ' + R.units.map(u => 'SSE/P.Way/' + u).join(', '), { px: 14, color: SOFT })]],
+        // §31.7: the Sr DEN cover reads "SR. DEN(I)/HWH" alone, then "AENs: AEN/LLH (Liluah) · …"; never "AEN/undefined"
+        [14, 22, [t(SRDEN ? name : 'AEN/' + R.aen + ' · ' + name, { px: 18, bold: true, track: 0.08 })]],
+        [3, 18, [t(SRDEN
+          ? 'AENs: ' + (R.aenList && R.aenList.length ? R.aenList.map(a => 'AEN/' + a.aen + (a.town ? ' (' + a.town + ')' : '')).join(' · ') : (R.aens || []).map(a => 'AEN/' + a).join(' · '))
+          : 'Units: ' + R.units.map(u => 'SSE/P.Way/' + u).join(', '), { px: 14, color: SOFT })]],
         [8, 30, [t(dateLong, { px: 24, font: SERIF })]],
         [2, 20, [t('the day of ' + dd(d1) + ' and the night of ' + d1.slice(8, 10) + '/' + dd(D), { px: 15, font: SERIF, italic: true, color: SOFT })]],
         [20, 16, [img(art.contents, 634, 16)]]];
@@ -1408,7 +1454,10 @@
       ? displayPages.map(function (childs, i) { return { properties: { page: PAGE }, footers: { default: pick.c.footerFor(i + 2, total) }, children: childs }; })
       : [{ properties: { page: PAGE }, footers: { default: footer }, children: kids }];
     return new Document({
-      creator: 'AEN Morning Position', title: 'Morning Position ' + R.aen + ' ' + D.split('-').reverse().join('.'),
+      creator: 'AEN Morning Position', title: 'Morning Position ' + (SRDEN ? (R.srden || 'Sr DEN') : R.aen) + ' ' + D.split('-').reverse().join('.'),
+      // §31.7 15.11: the footer's Page / of fields were cached empty, so Word showed "Page  of" until F9; updateFields
+      // makes Word compute every field on open, so the page numbers (AEN file too) print straight away.
+      features: { updateFields: true },
       styles: { default: { document: { run: { font: FONT, size: SZ } } } },
       sections: [{ properties: { page: top.page }, footers: { default: top.footer }, children: top.children }].concat(bodySections)
     });

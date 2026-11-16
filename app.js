@@ -113,6 +113,7 @@
       D = me.today; $('tPick').value = D;
       $('rAen').innerHTML = ''; me.offices.forEach(o => { const op = el('option', '', 'AEN/' + o.aen + ' · ' + town(o.office)); op.value = o.aen; $('rAen').appendChild(op); });
     }
+    if ($('tmsDash')) $('tmsDash').hidden = me.role !== 'admin';   // §32: TMS dashboard is admin only
     show(me.role === 'aen' ? 'vAen' : me.role === 'srden' ? 'vSrden' : 'vToday');
   }
   function show(v) {
@@ -441,6 +442,16 @@
     runQueue(today.aens.map(a => a.aen), true).then(() => { if (srdenAfter && canGenerate()) generateSrdenRun(); });
   };
   $('genSrden').onclick = () => generateSrdenRun();
+  // §32: admin-only "Download TMS dashboard" — build the PDF for the date in the box from the TMS store
+  if ($('tmsDash')) $('tmsDash').onclick = async () => {
+    const btn = $('tmsDash'), label = btn.textContent; btn.disabled = true; btn.textContent = 'Building…';
+    try {
+      const R = await call('tmsDashboard', { date: D });
+      const bytes = await TmsDashboardPdf.buildTmsDashboardPdf(window.PDFLib, R);
+      saveBlob(new Blob([bytes], { type: 'application/pdf' }), TmsDashboardPdf.pdfName(R));
+    } catch (e) { tell(e.message, 'err'); }
+    btn.disabled = false; btn.textContent = label;
+  };
   function stopAll() {
     srdenAfter = false;                                  // Stop cancels the Sr DEN step that would have followed
     stopping = true;                                     // start no more offices

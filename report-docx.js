@@ -719,7 +719,7 @@
           // a figure that got worse since the previous morning is red and bold, one that got better green and bold
           const GROUPS = [['Rails, welds and USFD', [1, 2, 16, 17, 18, 19, 34, 35, 38, 39]], ['Inspections and maintenance', [3, 4, 5, 6, 7, 8, 9, 10, 11, 36, 37, 41, 42]],
             ['Defects pending', [12, 13, 14, 15]], ['Track recording', [20, 21, 22, 23, 29, 30]], ['Asset renewal overdue', [31, 32, 33]]];
-          const LEFT_OUT = [24, 25, 26, 27, 28], MORE_IS_BETTER = [34, 35, 36, 37, 38, 39];
+          const LEFT_OUT = [24, 25, 26, 27, 28, 40], MORE_IS_BETTER = [34, 35, 36, 37, 38, 39];   // 40: the glued joints are read for the §32 dashboard, not shown in the AEN report
           const known = GROUPS.reduce((a, g) => a.concat(g[1]), LEFT_OUT), other = [...new Set(S.tms.rows.map(t => t.sn))].filter(n => known.indexOf(n) < 0);
           let sl = 0;
           if (other.length) GROUPS.push(['Other items', other]);

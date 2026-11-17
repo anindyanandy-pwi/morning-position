@@ -13,7 +13,51 @@
       try { coverArt[ks[i]] = new Uint8Array(await (await fetch('cover-' + ks[i] + '.png')).arrayBuffer()); } catch (e) { coverArt[ks[i]] = null; } } }
     return coverArt;
   }
+  // 17.11: on some office PCs a library file (seen: JSZip) did not load with the page, and the View/Download said
+  // "JSZip is not defined". Before building, check the libraries and load any missing one again: a second copy of
+  // JSZip under a neutral name, then the same file, then a public mirror. docx-preview takes JSZip when it loads, so
+  // it is loaded again after a late JSZip. The error, if all fail, names the library.
+  var BASE = (function () { try { var s = document.currentScript && document.currentScript.src; return s ? s.replace(/[^\/?#]*([?#].*)?$/, '') : ''; } catch (e) { return ''; } })();
+  var zipAtLoad = typeof g.JSZip === 'function', libsP = null;
+  function loadScript(src) {
+    return new Promise(function (res, rej) {
+      var s = document.createElement('script'); s.src = src;
+      s.onload = function () { res(); }; s.onerror = function () { s.remove(); rej(new Error('could not load ' + src)); };
+      document.head.appendChild(s);
+    });
+  }
+  async function firstOf(srcs, ok) {
+    for (var i = 0; i < srcs.length && !ok(); i++) { try { await loadScript(srcs[i]); } catch (e) { console.warn(e.message); } }
+    return ok();
+  }
+  function libsOk() {
+    return typeof g.JSZip === 'function' && !!(g.docx && g.docx.Packer) && !!(g.docxPreview && g.docxPreview.renderAsync) && zipAtLoad;
+  }
+  function ensureLibs() {
+    if (libsOk()) return Promise.resolve();
+    if (!libsP) libsP = (async function () {
+      var r = '?r=' + Date.now();
+      if (!await firstOf([BASE + 'vendor/archive-3.10.1.min.js' + r, BASE + 'vendor/jszip-3.10.1.min.js' + r,
+        'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js'], function () { return typeof g.JSZip === 'function'; }))
+        throw new Error('the zip library (JSZip) could not be loaded on this computer. Please press Ctrl+F5 and try again; if it still fails, the office network may be blocking it.');
+      if (!(g.docx && g.docx.Packer)) {
+        var pv = g.docxPreview;
+        if (!await firstOf([BASE + 'vendor/docx-9.8.1.iife.js' + r], function () { return !!(g.docx && g.docx.Packer); }))
+          throw new Error('the Word library (docx) could not be loaded on this computer. Please press Ctrl+F5 and try again.');
+        if (pv && pv.renderAsync) g.docxPreview = pv;
+      }
+      if (!zipAtLoad || !(g.docxPreview && g.docxPreview.renderAsync)) {
+        var gen = g.docx;
+        try { await loadScript(BASE + 'vendor/docx-preview-0.3.5.min.js' + r); } catch (e) { console.warn(e.message); }
+        if (g.docx && g.docx.renderAsync) g.docxPreview = g.docx;
+        g.docx = gen;
+        zipAtLoad = true;
+      }
+    })().finally(function () { libsP = null; });
+    return libsP;
+  }
   async function docxBlob(R, opts) {
+    await ensureLibs();
     var o = { logo: await getLogo(), cover: await getCover() };
     if (opts) for (var k in opts) o[k] = opts[k];
     return word2007Safe(JSZip, await docx.Packer.toBlob(buildMorningDoc(docx, R, o)), 'blob');
@@ -64,5 +108,5 @@
       else if (/^AEN\/\S+\s+·\s+\S/.test(t) && t === t.toUpperCase()) ps[n].style.letterSpacing = '0.08em';
     }
   }
-  g.AMPDocx = { getLogo: getLogo, getCover: getCover, docxBlob: docxBlob, measureBlob: measureBlob, displayBlob: displayBlob, docxName: docxName, saveBlob: saveBlob, seatCover: seatCover };
+  g.AMPDocx = { getLogo: getLogo, getCover: getCover, docxBlob: docxBlob, ensureLibs: ensureLibs, measureBlob: measureBlob, displayBlob: displayBlob, docxName: docxName, saveBlob: saveBlob, seatCover: seatCover };
 })(window);

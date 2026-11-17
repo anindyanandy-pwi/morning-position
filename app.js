@@ -197,6 +197,8 @@
     doc.appendChild(scaleEl); body.appendChild(doc);
     // docx-preview draws the real .docx (no second HTML layout). The page keeps its real width; fitPreview zooms the
     // whole thing to the panel width (fit to width, scroll down — spec §24.1).
+    if (window.AMPDocx && AMPDocx.ensureLibs) await AMPDocx.ensureLibs();
+    if (!(window.docxPreview && docxPreview.renderAsync)) throw new Error('the on-screen viewer (docx-preview) could not be loaded on this computer; Download still works.');
     await window.docxPreview.renderAsync(blob, scaleEl, null, { inWrapper: true, ignoreLastRenderedPageBreak: true });
     await Promise.all([...scaleEl.querySelectorAll('img')].map(i => i.complete ? 0 : new Promise(r => { i.onload = i.onerror = r; })));
     if (window.AMPDocx && AMPDocx.seatCover) AMPDocx.seatCover(scaleEl);   // the cover frame onto the sheet, as the redesign reader does

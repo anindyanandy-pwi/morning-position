@@ -980,10 +980,6 @@
       // each, every one of the Sr DEN's AENs with its own full table(s) — rendered by the AEN section renderers above
       // (runGuards), not a one-line count. An AEN with nothing in a section gets "AEN/x: Nil"; a section Nil for all its
       // AENs collapses to one line. Route time loss is the union of the AENs' routes once, then each AEN's cautions.
-      const SRDEN_SECTIONS = [[1, 'Mini control exceptions'], [2, 'Winter patrolling'], [3, 'Failures'],
-        [4, 'Cautions in the section and TDC overdue'], [5, 'Speed restrictions in force'], [6, 'Bad road surface at LC gates'],
-        [13, 'Blocks availed and output'], [14, 'Machine utilisation'], [16, 'USFD testing and flaws'],
-        [19, 'Worksite entry in TMS'], [20, 'Worksite safety arrangement']];
       const srdenNilRe = /^(nil|none|–|-|season not started|no route|no worksite|not applicable|no entry|all planned|nothing|no block|no machine)/i;
       // a section has real content for an AEN when it carries a table with body rows, a sub-heading, or a key–value line
       // whose value is not itself "Nil"/"none"/…
@@ -997,7 +993,7 @@
         if (p.t === 'sub' && /^Route time loss/.test(p.text)) { i++; continue; }
         if (p.t === 'kv' && (p.rows || []).some(r => /^Route time loss/.test(String(r[0])))) continue;
         out.push(p); } return out; };
-      const buildSrdenRoute = reports => {
+      const buildSrdenRoute = (reports, dispNo, title) => {
         const seen = {}, routes = [], d1 = v => v === null || v === undefined || v === '' ? '–' : (typeof v === 'number' ? v.toFixed(1) : String(v));
         (R.aenReports || []).forEach(ar => { const sp = ar.R && ar.R.sections && ar.R.sections.speed;
           if (sp && sp.ok !== false && Array.isArray(sp.routes)) sp.routes.filter(r => r.mine).forEach(r => {
@@ -1012,7 +1008,7 @@
         reports.forEach(rep => { const rest = srdenDropRoute(rep.secs.filter(sp => sp.head.no === 5).flatMap(sp => sp.parts || []));
           if (srdenHasContent(rest)) { parts.push(SUB('AEN/' + rep.aen)); parts.push(...rest); }
           else parts.push(NOTE([['AEN/' + rep.aen + ': ', { bold: true, size: 18 }], ['no cautions in the caution file', { italics: true, size: 18 }]])); });
-        add(head('5', 'Speed restrictions in force'), parts);
+        add(head(dispNo, title), parts);
       };
       const buildSrdenBody = () => {
         // run the AEN section pass once per AEN, each into its own array, so every AEN's full tables are available
@@ -1024,23 +1020,39 @@
           const into = [], prev = COLLECT; COLLECT = into; runGuards(Rx.sections || {}, Rx); COLLECT = prev;
           return { aen: ar.aen, stale: ar.stale, secs: into };
         });
-        SRDEN_SECTIONS.forEach(([no, title]) => {
-          if (no === 5) { buildSrdenRoute(reports); return; }
-          const any = reports.some(rep => { const es = rep.secs.filter(sp => sp.head.no === no); return es.length && srdenHasContent(es.flatMap(sp => sp.parts || [])); });
-          if (!any) { add(head(String(no), title), [NOTE([['Nil for all AENs.', { italics: true, size: 18 }]])]); return; }
+        // §31.7 (16.11): show EVERY section the AEN reports carry, in the AEN report's order, numbered consecutively
+        // 1..N in this file (the earlier fixed subset left gaps 6 → 13 → 14 … in the contents). Titles come from the AEN
+        // reports; '7–8' (an AEN with no NI LC gates and no CCTV) counts as sections 7 and 8 so the columns line up.
+        const titleByNo = { 7: 'NI LC inspection', 8: 'CCTV recording check' }, present = {};
+        reports.forEach(rep => rep.secs.forEach(sp => {
+          (sp.head.no === '7–8' ? [7, 8] : [sp.head.no]).forEach(no => {
+            if (typeof no !== 'number') return; present[no] = 1;
+            const ti = sp.head.no === '7–8' ? titleByNo[no] : (sp.head.title || sp.head.line || titleByNo[no] || '');
+            if (ti && (!titleByNo[no] || ti.length > titleByNo[no].length)) titleByNo[no] = ti;
+          });
+        }));
+        present[5] = 1; if (!titleByNo[5]) titleByNo[5] = 'Speed restrictions in force';   // the route-loss union + per-AEN cautions always appears
+        const orderNos = Object.keys(present).map(Number).sort((a, b) => a - b);
+        const matchParts = (rep, no) => rep.secs.filter(sp => sp.head.no === no || ((no === 7 || no === 8) && sp.head.no === '7–8')).flatMap(sp => sp.parts || []);
+        let n = 0;
+        orderNos.forEach(no => {
+          n++; const title = titleByNo[no] || ('Section ' + no);
+          if (no === 5) { buildSrdenRoute(reports, String(n), title); return; }
+          const any = reports.some(rep => srdenHasContent(matchParts(rep, no)));
+          if (!any) { add(head(String(n), title), [NOTE([['Nil for all AENs.', { italics: true, size: 18 }]])]); return; }
           const parts = [];
           reports.forEach(rep => {
-            const flat = rep.secs.filter(sp => sp.head.no === no).flatMap(sp => sp.parts || []);
+            const flat = matchParts(rep, no);
             if (srdenHasContent(flat)) { parts.push(SUB('AEN/' + rep.aen)); parts.push(...flat); }
             else parts.push(srdenAenNil(rep.aen));
           });
-          add(head(String(no), title), parts);
+          add(head(String(n), title), parts);
         });
-        // division (IOW) items with no AEN, and the division machine-idle line (§31.7 3d), at the end
+        // division (IOW) items with no AEN, and the division machine-idle line (§31.7 3d), at the end — numbered next
         const div = R.division || {}, dparts = [];
         (div.iow || []).forEach(it => dparts.push(NOTE([[(it.item || it.text || JSON.stringify(it)) + '.', { size: 18 }]])));
         if (div.machineIdle) dparts.push(NOTE([['Division machines idle: ', { bold: true, size: 18 }], [typeof div.machineIdle === 'object' ? (div.machineIdle.text || len(div.machineIdle.rows) + ' machine(s)') : String(div.machineIdle), { size: 18 }]]));
-        if (dparts.length) add(head('Div', 'Division (IOW) items'), dparts);
+        if (dparts.length) add(head(String(n + 1), 'Division (IOW) items'), dparts);
       };
       if (SRDEN) buildSrdenBody();
 
@@ -1395,16 +1407,25 @@
         [20, 16, [img(art.contents, 634, 16)]]];
       // the contents: the sections in this report, with the page each starts on (the top sheet is page 1)
       const has = n => n in secs, pg = n => String(secs[n] + 1);
-      const ITEMS = [[1, 'Mini control exceptions', [['AEN mini control items'], ['PWI mini control items'], ['IOW mini control items']]],
-        [2, 'Winter patrolling'], [3, S.pir && S.pir.ok && S.pir.rows.length ? 'Failures and PIRs' : 'Failures'], [4, 'Cautions and TDC overdue'],
-        [5, 'Speed restrictions in force', [['Route time loss'], ['Work (temporary) cautions'], ['Permanent cautions']]], [6, 'Bad road surface at LC gates'],
-        [7, 'NI LC inspection'], [8, 'CCTV recording check'], [9, 'Spot attention due'],
-        [10, 'Work planned for the next day', [['Track-circuited area'], ['Non track-circuited area']]], [11, 'Inspections due'], [12, 'KPI items'],
-        [13, 'Blocks availed and output'], [14, 'Machine utilisation'], [15, 'Train detention by engineering'], [16, 'USFD testing and flaws'],
-        [17, 'MDU, cess and ballast'], [18, 'TMS dashboard'], [19, 'Worksite entry in TMS'],
-        [20, 'Worksite safety arrangement', [['PWI unit-wise'], ['IOW unit-wise']]], [21, 'Weekly position']];
+      // the Sr DEN sub-items shown in the contents under the few sections that have them (kept as in the AEN report)
+      const SRDEN_SUBS = { 'Mini control exceptions': [['AEN mini control items'], ['PWI mini control items'], ['IOW mini control items']],
+        'Speed restrictions in force': [['Route time loss'], ['Work (temporary) cautions'], ['Permanent cautions']],
+        'Work planned for the next day': [['Track-circuited area'], ['Non track-circuited area']],
+        'Worksite safety arrangement': [['PWI unit-wise'], ['IOW unit-wise']] };
+      // a Sr DEN file lists its own sections (consecutive numbers, titles straight from the report); an AEN report uses
+      // the fixed §3 list. Either way the contents follows the body.
+      const ITEMS = SRDEN
+        ? (pick.c.heads || []).map(h => [h.no, h.title, SRDEN_SUBS[h.title]])
+        : [[1, 'Mini control exceptions', [['AEN mini control items'], ['PWI mini control items'], ['IOW mini control items']]],
+          [2, 'Winter patrolling'], [3, S.pir && S.pir.ok && S.pir.rows.length ? 'Failures and PIRs' : 'Failures'], [4, 'Cautions and TDC overdue'],
+          [5, 'Speed restrictions in force', [['Route time loss'], ['Work (temporary) cautions'], ['Permanent cautions']]], [6, 'Bad road surface at LC gates'],
+          [7, 'NI LC inspection'], [8, 'CCTV recording check'], [9, 'Spot attention due'],
+          [10, 'Work planned for the next day', [['Track-circuited area'], ['Non track-circuited area']]], [11, 'Inspections due'], [12, 'KPI items'],
+          [13, 'Blocks availed and output'], [14, 'Machine utilisation'], [15, 'Train detention by engineering'], [16, 'USFD testing and flaws'],
+          [17, 'MDU, cess and ballast'], [18, 'TMS dashboard'], [19, 'Worksite entry in TMS'],
+          [20, 'Worksite safety arrangement', [['PWI unit-wise'], ['IOW unit-wise']]], [21, 'Weekly position']];
       const saturday = day.getUTCDay() === 6;
-      const shown = ITEMS.filter(([n]) => has(n) || (n === 21 && saturday));
+      const shown = SRDEN ? ITEMS.filter(([n]) => has(n)) : ITEMS.filter(([n]) => has(n) || (n === 21 && saturday));
       const colW = Math.floor((CW - px(40)) / 2), numT = px(30);
       // each contents line: [gap above (px), line height (px), paragraph maker]
       const line = (n, title, page, grey) => o => new Paragraph({ tabStops: [{ type: TabStopType.LEFT, position: numT }, { type: TabStopType.RIGHT, position: colW, leader: LeaderType.DOT }],
@@ -1412,9 +1433,9 @@
           t('\t', { px: 14, color: grey ? 'B0B0B0' : '888888' }), page === null ? t('Saturdays only', { px: 12.5, italic: true, color: '6B6B6B' }) : t(page, { px: 14 })] });
       const subLine = (title, note) => o => new Paragraph({ indent: { left: numT }, tabStops: [{ type: TabStopType.RIGHT, position: colW }], spacing: o,
         children: [t(title, { px: 12.5, color: '2B2B2B' }), ...(note ? [t('\t' + note, { px: 12.5, italic: true, color: '6B6B6B' })] : [])] });
-      const lines = it => { const [n, title, subs] = it;
-        return [[8, 17, line(n, title, n === 21 ? null : pg(n), n === 21)], ...(subs || []).map(([st, note], i) => [i ? 3 : 2, 15, subLine(st, note)])]; };
-      const colL = shown.filter(i => i[0] <= 9).flatMap(lines), colR = shown.filter(i => i[0] > 9).flatMap(lines);
+      const lines = it => { const [n, title, subs] = it; const wk = !SRDEN && n === 21;
+        return [[8, 17, line(n, title, wk ? null : pg(n), wk)], ...(subs || []).map(([st, note], i) => [i ? 3 : 2, 15, subLine(st, note)])]; };
+      const colL = shown.filter(i => Number(i[0]) <= 9).flatMap(lines), colR = shown.filter(i => Number(i[0]) > 9).flatMap(lines);
       [colL, colR].forEach(c => { if (c.length) c[0][0] = 14; });
       // stretch (or shrink) every gap by the same factor so the contents end at the footer, as on the design
       const SEAL = 256, sum = a => a.reduce((x, y) => x + y, 0);
